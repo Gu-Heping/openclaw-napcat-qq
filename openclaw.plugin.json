@@ -1,0 +1,88 @@
+{
+  "id": "napcat-qq",
+  "name": "napcat-qq",
+  "description": "QQ channel integration via NapCat (OneBot v11 protocol)",
+  "version": "2.0.0",
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": true,
+    "properties": {
+      "httpUrl": { "type": "string", "description": "NapCat HTTP API URL", "default": "http://127.0.0.1:3000" },
+      "wsUrl": { "type": "string", "description": "NapCat WebSocket URL", "default": "ws://127.0.0.1:3001" },
+      "token": { "type": "string", "description": "NapCat access token" },
+      "selfId": { "type": "string", "description": "Bot's QQ number" },
+      "behavior": {
+        "type": "object",
+        "description": "Bot behavior settings",
+        "properties": {
+          "botNames": { "type": "array", "items": { "type": "string" }, "description": "Bot trigger names for group chat" },
+          "helpKeywords": { "type": "array", "items": { "type": "string" }, "description": "Help-related keywords" },
+          "questionPatterns": { "type": "array", "items": { "type": "string" }, "description": "Question-like patterns" },
+          "groupReplyProbInConvo": { "type": "number", "description": "Reply probability when in active conversation", "default": 0.4 },
+          "groupReplyProbRandom": { "type": "number", "description": "Random reply probability", "default": 0.05 },
+          "groupReplyWindowMs": { "type": "number", "description": "Active conversation window (ms)", "default": 300000 },
+          "minIntervalMs": { "type": "number", "description": "Minimum interval between messages from same user (ms)", "default": 1000 },
+          "dedupTtlMs": { "type": "number", "description": "Deduplication TTL (ms)", "default": 60000 }
+        }
+      },
+      "proactive": {
+        "type": "object",
+        "description": "Proactive messaging settings",
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Enable proactive messages", "default": true },
+          "checkIntervalMs": { "type": "number", "description": "Check interval (ms)", "default": 60000 },
+          "minGlobalIntervalMs": { "type": "number", "description": "Global minimum interval (ms)", "default": 300000 },
+          "perUserIntervalMs": { "type": "number", "description": "Per-user interval (ms)", "default": 14400000 },
+          "minSinceUserMsgMs": { "type": "number", "description": "Min time since user last message (ms)", "default": 1800000 },
+          "quietHoursStart": { "type": "number", "description": "Quiet hours start (hour)", "default": 22 },
+          "quietHoursEnd": { "type": "number", "description": "Quiet hours end (hour)", "default": 7 },
+          "pendingKeywords": { "type": "array", "items": { "type": "string" }, "description": "Keywords for pending items" }
+        }
+      },
+      "models": {
+        "type": "object",
+        "description": "Model name → [provider, model] mapping for /model command",
+        "additionalProperties": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "limits": {
+        "type": "object",
+        "description": "Various limits",
+        "properties": {
+          "maxRetries": { "type": "number", "default": 3 },
+          "retryBaseDelayMs": { "type": "number", "default": 2000 },
+          "apiTimeoutMs": { "type": "number", "default": 10000 },
+          "imageMaxSize": { "type": "number", "description": "Max image size (bytes)", "default": 15728640 },
+          "fileMaxSize": { "type": "number", "description": "Max file download size (bytes)", "default": 20971520 },
+          "maxMessageHistory": { "type": "number", "default": 200 },
+          "maxPendingRequests": { "type": "number", "default": 50 }
+        }
+      },
+      "network": {
+        "type": "object",
+        "description": "Network settings",
+        "properties": {
+          "reconnectDelayMs": { "type": "number", "default": 3000 },
+          "maxReconnectDelayMs": { "type": "number", "default": 60000 },
+          "pingIntervalMs": { "type": "number", "default": 20000 },
+          "fetchTimeoutMs": { "type": "number", "default": 60000 },
+          "imageFetchTimeoutMs": { "type": "number", "default": 15000 }
+        }
+      },
+      "paths": {
+        "type": "object",
+        "description": "Path overrides",
+        "properties": {
+          "workspace": { "type": "string", "description": "Override workspace path" },
+          "imageTemp": { "type": "string", "description": "Override image temp directory" },
+          "sessionsDir": { "type": "string", "description": "Override sessions directory" },
+          "containerPrefixes": { "type": "array", "items": { "type": "string" }, "description": "NapCat container path prefixes" }
+        }
+      }
+    }
+  }
+}

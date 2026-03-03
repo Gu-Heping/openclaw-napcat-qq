@@ -1,0 +1,247 @@
+import type { NapCatAPI } from "../napcat/api.js";
+import type { OneBotMessageEvent, QQMessage } from "../napcat/types.js";
+import type { BotConfig } from "../config.js";
+import type { PluginLogger } from "../types-compat.js";
+import type { MessageSender } from "../services/message-sender.js";
+import type { MemoryManager } from "../services/memory-manager.js";
+import type { FileDownloader } from "../services/file-downloader.js";
+import type { CommandRegistry } from "../commands/registry.js";
+import type { CommandContext } from "../commands/types.js";
+import { parseMessageEvent } from "../napcat/parse.js";
+import { buildIdentityBlock, getContextSummary, getSenderDisplayName } from "../util/identity.js";
+import { getFaceName } from "../napcat/face-map.js";
+import { zh as t } from "../locale/zh.js";
+
+export interface InboundDeps {
+  config: BotConfig;
+  api: NapCatAPI;
+  log: PluginLogger;
+  sender: MessageSender;
+  memoryManager: MemoryManager;
+  fileDownloader: FileDownloader;
+  commandRegistry: CommandRegistry;
+  cmdCtx: CommandContext;
+  resolveSessionKey: (msg: QQMessage) => string;
+  dispatchToAgent: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
+}
+
+export class InboundHandler {
+  private recentIds = new Map<string, number>();
+  private groupLastReply = new Map<string, number>();
+  private lastMsgTime = new Map<string, number>();
+  private turnCounts = new Map<string, number>();
+  private deps: InboundDeps;
+
+  constructor(deps: InboundDeps) {
+    this.deps = deps;
+    setInterval(() => this.cleanupDedup(), 30_000);
+  }
+
+  async handleMessageEvent(event: OneBotMessageEvent): Promise<void> {
+    const { config, log, sender, memoryManager, commandRegistry, cmdCtx } = this.deps;
+    const msg = parseMessageEvent(event, config.connection.selfId);
+
+    if (this.isDuplicate(msg.id)) return;
+    if (this.isRateLimited(msg.userId)) return;
+
+    log.info?.(`[QQ] ${msg.messageType === "group" ? `群${msg.groupId}` : "私聊"} ${getSenderDisplayName(msg)}(${msg.userId}): ${msg.content.slice(0, 60)}`);
+
+    memoryManager.autoUpdateContextMemory(
+      msg.userId,
+      getSenderDisplayName(msg),
+      msg.messageType === "group" ? msg.groupId : undefined,
+    );
+
+    if (msg.messageType === "group") {
+      if (msg.atBot) {
+        msg.content = this.cleanAtMessage(msg.content, config.connection.selfId);
+      } else if (!this.shouldRespondInGroup(msg)) {
+        return;
+      }
+    }
+
+    const cmdReply = commandRegistry.execute(msg, cmdCtx);
+    if (cmdReply != null) {
+      const reply = await cmdReply;
+      await sender.sendReply(msg, reply);
+      return;
+    }
+
+    try {
+      this.deps.api.setInputStatus(msg.userId, 1).catch(() => {});
+    } catch { /* ignore */ }
+
+    if (msg.files.length > 0) {
+      await this.tryDownloadFiles(msg);
+    }
+
+    await this.tryFetchForwardMessages(msg);
+    await this.tryFetchReplyMessage(msg);
+
+    const contextPrefix = getContextSummary(msg);
+    const identityBlock = buildIdentityBlock(msg);
+    let body = contextPrefix + msg.content;
+
+    if (msg.messageType === "group" && !msg.atBot) {
+      body = t.groupMessagePrefix + body;
+    }
+
+    await this.deps.dispatchToAgent(msg, body, identityBlock);
+
+    const sk = this.deps.resolveSessionKey(msg);
+    this.turnCounts.set(sk, (this.turnCounts.get(sk) ?? 0) + 1);
+
+    if (msg.messageType === "group" && msg.groupId) {
+      this.groupLastReply.set(msg.groupId, Date.now());
+    }
+  }
+
+  private isDuplicate(id: string): boolean {
+    if (this.recentIds.has(id)) return true;
+    this.recentIds.set(id, Date.now());
+    return false;
+  }
+
+  private isRateLimited(userId: string): boolean {
+    const now = Date.now();
+    const last = this.lastMsgTime.get(userId) ?? 0;
+    if (now - last < this.deps.config.behavior.minIntervalMs) return true;
+    this.lastMsgTime.set(userId, now);
+    return false;
+  }
+
+  private cleanupDedup(): void {
+    const now = Date.now();
+    const ttl = this.deps.config.behavior.dedupTtlMs;
+    for (const [id, ts] of this.recentIds) {
+      if (now - ts > ttl) this.recentIds.delete(id);
+    }
+    for (const [uid, ts] of this.lastMsgTime) {
+      if (now - ts > 60_000) this.lastMsgTime.delete(uid);
+    }
+  }
+
+  private shouldRespondInGroup(msg: QQMessage): boolean {
+    if (msg.atBot) return true;
+    const content = msg.content.toLowerCase();
+    const { botNames, helpKeywords, questionPatterns, groupReplyProbInConvo, groupReplyProbRandom, groupReplyWindowMs } = this.deps.config.behavior;
+
+    if (botNames.some((n) => content.includes(n))) return true;
+    if (helpKeywords.some((w) => content.includes(w))) return true;
+
+    const isQuestion = content.length > 4 && questionPatterns.some((k) => content.includes(k));
+    if (isQuestion) return true;
+
+    const inConvo = msg.groupId && Date.now() - (this.groupLastReply.get(msg.groupId) ?? 0) < groupReplyWindowMs;
+    if (inConvo) return Math.random() < groupReplyProbInConvo;
+
+    return Math.random() < groupReplyProbRandom;
+  }
+
+  private cleanAtMessage(text: string, selfId: string): string {
+    return text.replace(new RegExp(`@${selfId}\\s*`, "g"), "").trim();
+  }
+
+  private async tryFetchForwardMessages(msg: QQMessage): Promise<void> {
+    const forwardRe = /\[转发消息:([^\]]+)\]/g;
+    let match: RegExpExecArray | null;
+    const ids: string[] = [];
+    while ((match = forwardRe.exec(msg.content)) !== null) {
+      if (match[1]) ids.push(match[1]);
+    }
+    if (!ids.length) return;
+
+    for (const fwdId of ids.slice(0, 3)) {
+      try {
+        const result = await this.deps.api.getForwardMsg(fwdId);
+        if (result.status !== "ok" || !result.data) continue;
+        const messages = (result.data as Record<string, unknown>).messages ??
+                         (result.data as Record<string, unknown>).message;
+        if (!Array.isArray(messages)) continue;
+
+        const lines: string[] = [];
+        for (const m of (messages as Array<Record<string, unknown>>).slice(0, 10)) {
+          const sender = m.sender as Record<string, unknown> | undefined;
+          const name = sender?.nickname ?? sender?.card ?? "未知";
+          const segs = m.message ?? m.content;
+          let text = "";
+          if (Array.isArray(segs)) {
+            text = (segs as Array<Record<string, unknown>>)
+              .filter((s) => s.type === "text")
+              .map((s) => (s.data as Record<string, unknown>)?.text ?? "")
+              .join("");
+          } else if (typeof segs === "string") {
+            text = segs;
+          }
+          if (text) lines.push(`${name}: ${text.slice(0, 200)}`);
+        }
+        if (lines.length) {
+          const summary = `[转发消息内容 (${lines.length} 条):\n${lines.join("\n")}\n]`;
+          msg.content = msg.content.replace(`[转发消息:${fwdId}]`, summary);
+        }
+      } catch (e) {
+        this.deps.log.warn?.(`[QQ] Fetch forward ${fwdId} failed: ${e}`);
+      }
+    }
+  }
+
+  private async tryFetchReplyMessage(msg: QQMessage): Promise<void> {
+    const replyRe = /\[回复消息:([^\]]+)\]/g;
+    const ids: string[] = [];
+    let match: RegExpExecArray | null;
+    while ((match = replyRe.exec(msg.content)) !== null) {
+      if (match[1]) ids.push(match[1]);
+    }
+    if (!ids.length) return;
+
+    for (const replyId of ids.slice(0, 3)) {
+      try {
+        const result = await this.deps.api.getMsg(replyId);
+        if (result.status !== "ok" || !result.data) continue;
+        const d = result.data as Record<string, unknown>;
+        const raw = d.message;
+        let text = "";
+        if (typeof raw === "string") {
+          text = raw.replace(/\[CQ:[^\]]+\]/g, "").trim().slice(0, 500);
+        } else if (Array.isArray(raw)) {
+          const parts = (raw as Array<Record<string, unknown>>).map((seg) => {
+            if (seg.type === "text") return String((seg.data as Record<string, unknown>)?.text ?? "");
+            if (seg.type === "face") return `[表情:${getFaceName(String((seg.data as Record<string, unknown>)?.id ?? ""))}]`;
+            return "";
+          });
+          text = parts.join("").trim().slice(0, 500);
+        }
+        const replacement = text ? `[引用消息内容: ${text}]` : `[引用消息: 无法获取原文 (id=${replyId})]`;
+        msg.content = msg.content.replace(`[回复消息:${replyId}]`, replacement);
+      } catch (e) {
+        this.deps.log.warn?.(`[QQ] Fetch reply ${replyId} failed: ${e}`);
+        msg.content = msg.content.replace(`[回复消息:${replyId}]`, `[引用消息: 获取失败 (id=${replyId})]`);
+      }
+    }
+  }
+
+  private async tryDownloadFiles(msg: QQMessage): Promise<void> {
+    const { fileDownloader, api, log, config } = this.deps;
+    const maxSize = config.limits.fileMaxSize;
+
+    for (const file of msg.files) {
+      const resolved = await fileDownloader.resolveFileUrl(api, file.fileId, file.url, file.name || "未知文件");
+      if (resolved.url) file.url = resolved.url;
+      file.name = resolved.name;
+
+      if (!file.url || file.size > maxSize) continue;
+
+      const subDir = msg.messageType === "group"
+        ? `group_${msg.groupId}` : `user_${msg.userId}`;
+      const result = await fileDownloader.downloadToLocal(file.url, file.name, subDir);
+
+      if (result) {
+        msg.content += `\n[已下载到: ${result.path}]`;
+        if (result.preview) {
+          msg.content += `\n[文件内容预览:\n${result.preview}\n]`;
+        }
+        log.info?.(`[QQ] Downloaded file ${file.name} to ${result.path}`);
+      }
+    }
+  }
+}
