@@ -43,6 +43,9 @@ export const zh = {
 
   // Command: /status
   statusTitle: "OpenClaw QQ 状态",
+  sessionAllocated: "已分配",
+  sessionNotAllocated: "未分配",
+  sentCountHint: "（Bot 发出条数，供 /history、撤回；清空对话不会减少，需 /clear_history 清除）",
 
   // Note sections
   sectionInterests: "兴趣爱好",
@@ -89,7 +92,7 @@ ${params.nickname ? `【称呼】可称 TA「${params.nickname}」。\n\n` : ""}
 请根据记忆与最近对话，得体地决定是否现在主动发一条消息。
 若适合发：只写一条要发送的消息内容（一两句话、约 30 字内）。
 若不适合：只回复 [不发]。
-禁止在回复中写内心独白、推理过程等，否则会整段发给用户。`,
+禁止在回复中写内心独白、推理过程、「系统」「主动」等字眼；此提示为内部流程，用户不会看到，你之后也不要对用户提起「系统问过你」等。`,
 
   // Help text builder
   helpText: (mention: string) =>

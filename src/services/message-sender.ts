@@ -4,6 +4,7 @@ import type { PluginLogger } from "../types-compat.js";
 import type { QQMessage } from "../napcat/types.js";
 import { MessageManager } from "../util/message-manager.js";
 import { convertPlainAtToCq, expandInlineFaces } from "../util/cq-code.js";
+import { toImageFileParam } from "../util/image-file-param.js";
 
 export class MessageSender {
   constructor(
@@ -21,7 +22,8 @@ export class MessageSender {
   ): Promise<{ status: string; data?: unknown; message?: string; retcode?: number }> {
     const doSend = async () => {
       if (mediaUrl) {
-        const segments: unknown[] = [{ type: "image", data: { file: mediaUrl } }];
+        const fileParam = toImageFileParam(mediaUrl, this.config.limits.imageMaxSize);
+        const segments: unknown[] = [{ type: "image", data: { file: fileParam } }];
         if (text) segments.push({ type: "text", data: { text } });
         return isGroup
           ? await this.api.sendGroupMsg(target, segments)

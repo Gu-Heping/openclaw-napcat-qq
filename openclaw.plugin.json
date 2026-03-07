@@ -82,6 +82,18 @@
           "sessionsDir": { "type": "string", "description": "Override sessions directory" },
           "containerPrefixes": { "type": "array", "items": { "type": "string" }, "description": "NapCat container path prefixes" }
         }
+      },
+      "qzone": {
+        "type": "object",
+        "description": "QQ Zone bridge integration settings",
+        "properties": {
+          "enabled": { "type": "boolean", "description": "Enable QZone tools", "default": false },
+          "bridgeUrl": { "type": "string", "description": "onebot-qzone bridge HTTP URL", "default": "http://127.0.0.1:5700" },
+          "accessToken": { "type": "string", "description": "Bridge access token (optional)" },
+          "eventWsUrl": { "type": "string", "description": "Bridge WebSocket event endpoint", "default": "ws://127.0.0.1:5700/" },
+          "notifyUserId": { "type": "string", "description": "QQ user ID to receive QZone event notifications (bot owner)" },
+          "notifyEvents": { "type": "array", "items": { "type": "string", "enum": ["comment", "like", "post"] }, "description": "Event types to notify", "default": ["comment", "like"] }
+        }
       }
     }
   }

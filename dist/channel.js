@@ -1,5 +1,6 @@
 import { NapCatAPI } from "./napcat/api.js";
 import { convertPlainAtToCq, expandInlineFaces } from "./util/cq-code.js";
+import { toImageFileParam } from "./util/image-file-param.js";
 import { startGateway } from "./gateway.js";
 import { zh as t } from "./locale/zh.js";
 export function createQQChannelPlugin(ctx, runtime) {
@@ -67,8 +68,10 @@ export function createQQChannelPlugin(ctx, runtime) {
                     return { ok: false, error: new Error("NapCat API not initialized") };
                 const { to, mediaUrl, text } = outCtx;
                 const segments = [];
-                if (mediaUrl)
-                    segments.push({ type: "image", data: { file: mediaUrl } });
+                if (mediaUrl) {
+                    const fileParam = toImageFileParam(mediaUrl, config.limits.imageMaxSize);
+                    segments.push({ type: "image", data: { file: fileParam } });
+                }
                 if (text)
                     segments.push({ type: "text", data: { text } });
                 if (to.startsWith("g:")) {

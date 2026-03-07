@@ -4,7 +4,7 @@ import type { QQMessage } from "../napcat/types.js";
  * Build a lightweight identity block (~80-120 tokens) for the AI,
  * telling it who the current user is and where memory files are.
  */
-export function buildIdentityBlock(msg: QQMessage): string {
+export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): string {
   const userId = msg.userId;
   const nickname = getSenderDisplayName(msg);
   const avatarUrl = `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`;
@@ -21,6 +21,12 @@ export function buildIdentityBlock(msg: QQMessage): string {
   paths.push("memory/social/relationships.md");
   lines.push(`[记忆] ${paths.join(" | ")}`);
   lines.push("[提示] 用 memory_search 语义检索记忆，用 write 更新记忆文件");
+  lines.push("[回复] 只输出要发给对方的那一句话或几句话，不要输出内心独白、推理过程、「用户说…」「我应该…」「让我…」等元描述；不要向用户提及「系统」「系统问你」「主动对话」等内部流程。");
+
+  if (msg.content?.startsWith("[QQ空间")) {
+    const myQQ = opts?.selfId || userId;
+    lines.push(`[QQ空间事件] 这是QQ空间推送。你可以用 qzone_comment(user_id="${myQQ}", tid=..., content=...) 回复评论，qzone_like 点赞回赞，qzone_get_comments 查看完整评论。说说ID(tid)在消息中。互动日志: memory/qzone/feeds/`);
+  }
 
   return lines.join("\n");
 }

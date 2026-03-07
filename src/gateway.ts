@@ -1,5 +1,6 @@
 import { NapCatAPI } from "./napcat/api.js";
 import { NapCatClient } from "./napcat/client.js";
+import { QzoneAPI } from "./napcat/qzone-api.js";
 import { InboundHandler } from "./handlers/inbound.js";
 import { EventHandler } from "./handlers/events.js";
 import { ProactiveManager } from "./handlers/proactive.js";
@@ -9,6 +10,7 @@ import { SessionStore } from "./services/session-store.js";
 import { MemoryManager } from "./services/memory-manager.js";
 import { FileDownloader } from "./services/file-downloader.js";
 import { ImageResolver } from "./services/image-resolver.js";
+import { QzoneEventListener } from "./services/qzone-event-listener.js";
 import { expandInlineFaces } from "./util/cq-code.js";
 import { getSenderDisplayName } from "./util/identity.js";
 import type { PluginContext } from "./context.js";
@@ -70,6 +72,15 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   ctx.fileDownloader = fileDownloader;
   ctx.messageSender = sender;
   ctx.imageResolver = imageResolver;
+
+  if (config.qzone.enabled) {
+    ctx.qzoneApi = new QzoneAPI(
+      config.qzone.bridgeUrl,
+      config.qzone.accessToken || undefined,
+      { timeoutMs: config.limits.apiTimeoutMs },
+    );
+    log.info(`[QQ] QZone bridge enabled → ${config.qzone.bridgeUrl}`);
+  }
 
   for (const [sk, override] of sessionStore.loadModelOverrides()) {
     ctx.modelOverrides.set(sk, override);
@@ -269,6 +280,50 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   client.addMessageHandler((event) => inbound.handleMessageEvent(event));
   client.addNoticeHandler((event) => eventHandler.handleNotice(event));
   client.addRequestHandler((event) => eventHandler.handleRequest(event));
+
+  if (config.qzone.enabled && config.qzone.notifyEvents.length > 0) {
+    let qzoneSeq = Date.now();
+    const ownerId = Number(config.qzone.notifyUserId) || Number(config.connection.selfId || 0);
+    const selfId = Number(config.connection.selfId || 0);
+    const qzoneEvents = new QzoneEventListener(config.qzone, (type, userId, content, nickname, detail, tid) => {
+      log.info(`[QZone-Event] ${nickname}(${userId}): ${content.slice(0, 80)}`);
+      memoryManager.updateQzoneMemory(type, userId, nickname, detail, tid);
+      const now = Math.floor(Date.now() / 1000);
+      const numUserId = Number(userId) || 0;
+
+      // 1) 投递到评论者/点赞者会话 — bot 可以和对方互动
+      inbound.handleMessageEvent({
+        post_type: "message",
+        message_type: "private",
+        message_id: ++qzoneSeq,
+        user_id: numUserId,
+        message: [{ type: "text", data: { text: content } }],
+        raw_message: content,
+        sender: { user_id: numUserId, nickname: nickname || "QZone" },
+        time: now,
+        self_id: selfId,
+      });
+
+      // 2) 投递到主人会话 — 主人收到通知
+      if (numUserId !== ownerId) {
+        inbound.handleMessageEvent({
+          post_type: "message",
+          message_type: "private",
+          message_id: ++qzoneSeq,
+          user_id: ownerId,
+          message: [{ type: "text", data: { text: content } }],
+          raw_message: content,
+          sender: { user_id: ownerId, nickname: "QZone" },
+          time: now,
+          self_id: selfId,
+        });
+      }
+    }, log);
+    qzoneEvents.start(abortSignal).catch((e) => {
+      log.warn?.(`[QZone-Event] Listener exited: ${e}`);
+    });
+    log.info(`[QQ] QZone event listener → ${config.qzone.eventWsUrl} (events: ${config.qzone.notifyEvents.join(",")})`);
+  }
 
   setStatus({ state: "connecting", label: `QQ ${config.connection.selfId}` });
   proactive.start(abortSignal);

@@ -5,13 +5,20 @@ import { createMessagingTools } from "./messaging.js";
 import { createGroupAdminTools } from "./group-admin.js";
 import { createFileTools } from "./files.js";
 import { createRequestTools } from "./requests.js";
+import { createQzoneTools } from "./qzone.js";
 
 export function createAllTools(ctx: PluginContext): AnyAgentTool[] {
-  return [
+  const tools: AnyAgentTool[] = [
     ...createInfoTools(ctx),
     ...createMessagingTools(ctx),
     ...createGroupAdminTools(ctx),
     ...createFileTools(ctx),
     ...createRequestTools(ctx),
   ];
+
+  if (ctx.config.qzone.enabled) {
+    tools.push(...createQzoneTools(ctx));
+  }
+
+  return tools;
 }

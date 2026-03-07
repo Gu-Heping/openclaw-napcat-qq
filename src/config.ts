@@ -52,6 +52,15 @@ export interface PathsConfig {
   textExts: string[];
 }
 
+export interface QzoneConfig {
+  enabled: boolean;
+  bridgeUrl: string;
+  accessToken: string;
+  eventWsUrl: string;
+  notifyUserId: string;
+  notifyEvents: ("comment" | "like" | "post")[];
+}
+
 export interface BotConfig {
   connection: NapCatPluginConfig;
   behavior: BehaviorConfig;
@@ -60,6 +69,7 @@ export interface BotConfig {
   limits: LimitsConfig;
   network: NetworkConfig;
   paths: PathsConfig;
+  qzone: QzoneConfig;
 }
 
 const DEFAULT_BEHAVIOR: BehaviorConfig = {
@@ -142,11 +152,15 @@ function resolvePaths(overrides?: Record<string, unknown>): PathsConfig {
     path.join(process.env["HOME"] || "/root", ".openclaw");
   const workspace =
     process.env["OPENCLAW_WORKSPACE"] || path.join(home, "workspace");
+  // OpenClaw 状态目录：OPENCLAW_HOME 为用户主目录时状态在 home/.openclaw，否则 home 即状态目录
+  const stateDir =
+    process.env["OPENCLAW_STATE_DIR"] ||
+    (home.endsWith(".openclaw") ? home : path.join(home, ".openclaw"));
   const defaults: PathsConfig = {
     workspace,
     home,
     imageTemp: path.join(workspace, "qq_files", "images"),
-    sessionsDir: path.join(home, "agents", "main", "sessions"),
+    sessionsDir: path.join(stateDir, "agents", "main", "sessions"),
     containerPrefixes: ["/app/.config/QQ/", "/root/.config/QQ/"],
     textExts: [
       ".txt", ".md", ".json", ".csv", ".log", ".py", ".js", ".ts",
@@ -167,6 +181,18 @@ export function resolveConfig(raw?: Record<string, unknown>): BotConfig {
     selfId: String(c.selfId ?? ""),
   };
 
+  const qzoneRaw = (c.qzone ?? {}) as Record<string, unknown>;
+  const qzone: QzoneConfig = {
+    enabled: Boolean(qzoneRaw.enabled ?? false),
+    bridgeUrl: String(qzoneRaw.bridgeUrl ?? "http://127.0.0.1:5700"),
+    accessToken: String(qzoneRaw.accessToken ?? ""),
+    eventWsUrl: String(qzoneRaw.eventWsUrl ?? "ws://127.0.0.1:5700/"),
+    notifyUserId: String(qzoneRaw.notifyUserId ?? ""),
+    notifyEvents: Array.isArray(qzoneRaw.notifyEvents)
+      ? (qzoneRaw.notifyEvents as string[]).filter((e) => ["comment", "like", "post"].includes(e)) as ("comment" | "like" | "post")[]
+      : ["comment", "like"],
+  };
+
   return {
     connection,
     behavior: mergeSection(DEFAULT_BEHAVIOR, (c.behavior ?? {}) as Record<string, unknown>),
@@ -175,5 +201,6 @@ export function resolveConfig(raw?: Record<string, unknown>): BotConfig {
     limits: mergeSection(DEFAULT_LIMITS, (c.limits ?? {}) as Record<string, unknown>),
     network: mergeSection(DEFAULT_NETWORK, (c.network ?? {}) as Record<string, unknown>),
     paths: resolvePaths((c.paths ?? undefined) as Record<string, unknown> | undefined),
+    qzone,
   };
 }

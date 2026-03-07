@@ -1,6 +1,7 @@
 import type { BotConfig } from "./config.js";
 import type { PluginLogger } from "./types-compat.js";
 import type { NapCatAPI } from "./napcat/api.js";
+import type { QzoneAPI } from "./napcat/qzone-api.js";
 import type { MessageManager } from "./util/message-manager.js";
 import type { SessionStore } from "./services/session-store.js";
 import type { MemoryManager } from "./services/memory-manager.js";
@@ -15,6 +16,7 @@ export interface PluginContext {
   readonly modelOverrides: Map<string, { provider: string; model: string }>;
 
   api: NapCatAPI | null;
+  qzoneApi: QzoneAPI | null;
   msgManager: MessageManager | null;
   sessionStore: SessionStore | null;
   memoryManager: MemoryManager | null;
@@ -30,6 +32,7 @@ export function createPluginContext(config: BotConfig, log: PluginLogger): Plugi
     log,
     modelOverrides: new Map(),
     api: null,
+    qzoneApi: null,
     msgManager: null,
     sessionStore: null,
     memoryManager: null,

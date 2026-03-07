@@ -14,13 +14,13 @@ export const statusCommand: Command = {
     const m = Math.floor((uptime % 3600) / 60);
     const uptimeStr = h > 0 ? `${h}h${m}m` : `${m}m`;
 
-    const sessionActive = ctx.hasSession(sk);
+    const hasEntry = ctx.hasSession(sk);
 
     return `${t.statusTitle}
 
 运行: 正常 | 已运行: ${uptimeStr}
 当前: ${chatType} | 会话key: ${sk.slice(-20)}
-会话状态: ${sessionActive ? "活跃" : "无会话"}
-发送记录: ${ctx.msgManager.size} 条`;
+会话: ${hasEntry ? t.sessionAllocated : t.sessionNotAllocated}
+发送记录: ${ctx.msgManager.size} 条 ${t.sentCountHint}`;
   },
 };

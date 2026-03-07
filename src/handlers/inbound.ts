@@ -79,7 +79,7 @@ export class InboundHandler {
     await this.tryFetchReplyMessage(msg);
 
     const contextPrefix = getContextSummary(msg);
-    const identityBlock = buildIdentityBlock(msg);
+    const identityBlock = buildIdentityBlock(msg, { selfId: config.connection.selfId });
     let body = contextPrefix + msg.content;
 
     if (msg.messageType === "group" && !msg.atBot) {

@@ -159,7 +159,7 @@ export class MemoryManager {
     } catch { /* ignore */ }
   }
 
-  private updateSocialActivity(userId: string, groupId: string | undefined, nickname: string): void {
+  private updateSocialActivity(userId: string, groupId: string | undefined, nickname: string, contextOverride?: string): void {
     const filePath = path.join(this.workspace, "memory", "social", "interactions.md");
     if (!fs.existsSync(filePath)) {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
@@ -170,7 +170,7 @@ export class MemoryManager {
       fs.writeFileSync(relPath, t.memoryRelationshipTemplate);
     }
 
-    const context = groupId ? `群${groupId}` : "私聊";
+    const context = contextOverride ?? (groupId ? `群${groupId}` : "私聊");
     const now = new Date().toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
     const entry = `- ${now} ${nickname}(${userId}) ${context}`;
 
@@ -199,6 +199,51 @@ export class MemoryManager {
         this.updateRelationship(prev.userId, userId, prev.nickname, nickname, `群${groupId}`);
       }
       this.groupRecentSpeakers.set(groupId, { userId, nickname, time: Date.now() });
+    }
+  }
+
+  updateQzoneMemory(
+    type: "comment" | "like" | "post",
+    userId: string,
+    nickname: string,
+    detail: string,
+    tid?: string,
+  ): void {
+    try {
+      const feedDir = path.join(this.workspace, "memory", "qzone", "feeds");
+      fs.mkdirSync(feedDir, { recursive: true });
+
+      const today = new Date().toISOString().slice(0, 10);
+      const feedFile = path.join(feedDir, `${today}.md`);
+      const time = new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+
+      const labels: Record<string, string> = { comment: "评论", like: "点赞", post: "动态" };
+      const entry = `- ${time} [${labels[type]}] ${nickname || userId}${nickname ? `(${userId})` : ""}: ${detail}${tid ? ` [tid:${tid}]` : ""}`;
+
+      if (fs.existsSync(feedFile)) {
+        const content = fs.readFileSync(feedFile, "utf-8");
+        const lines = content.split("\n");
+        const insertIdx = lines.findIndex((l) => l.startsWith("- "));
+        if (insertIdx >= 0) {
+          lines.splice(insertIdx, 0, entry);
+        } else {
+          lines.push(entry);
+        }
+        if (lines.filter((l) => l.startsWith("- ")).length > 100) {
+          const kept = lines.filter((l) => !l.startsWith("- "));
+          const items = lines.filter((l) => l.startsWith("- ")).slice(0, 100);
+          const headerEnd = kept.findIndex((_, i) => i > 0);
+          fs.writeFileSync(feedFile, [...kept.slice(0, headerEnd > 0 ? headerEnd : 1), ...items, ...kept.slice(headerEnd > 0 ? headerEnd : 1)].join("\n"));
+        } else {
+          fs.writeFileSync(feedFile, lines.join("\n"));
+        }
+      } else {
+        fs.writeFileSync(feedFile, `# QQ空间动态 ${today}\n\n${entry}\n`);
+      }
+
+      this.updateSocialActivity(userId, undefined, nickname, `空间·${labels[type]}`);
+    } catch (e) {
+      this.log.warn?.(`[QQ] qzone memory write error: ${e}`);
     }
   }
 
