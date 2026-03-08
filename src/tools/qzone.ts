@@ -206,7 +206,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 6. qzone_get_comments ──
     {
       name: "qzone_get_comments",
-      description: `获取QQ空间说说的评论列表。user_id=说说作者QQ号，tid=说说ID`,
+      description: `获取说说的评论列表。user_id=说说作者QQ号，tid=说说ID。服务端会先尝试 PC/mobile 接口，失败时使用 feeds3 兜底（仅限曾通过动态流拉过的说说）。`,
       parameters: {
         type: "object",
         required: ["user_id", "tid"],
@@ -227,16 +227,26 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         if (res.status !== "ok") return textResult(formatResponse(res));
 
         const data = res.data as Record<string, unknown> | null;
-        const comments = (data?.comments ?? data?.data) as Record<string, unknown>[] | undefined;
-        if (!comments?.length) return textResult("暂无评论");
+        const code = data && typeof data.code === "number" ? data.code : 0;
+        const msg = data && typeof data.message === "string" ? data.message : "";
+        // 兼容桥接返回：PC 用 comment_list，mobile/feeds3 用 commentlist，部分用 comments/data
+        const comments = (data?.comments ?? data?.commentlist ?? data?.comment_list ?? data?.data) as Record<string, unknown>[] | undefined;
+        if (!comments?.length) {
+          if (code !== 0 && code !== -1 && msg) return textResult(`获取评论失败：${msg}`);
+          return textResult("暂无评论");
+        }
 
         const lines = comments.map((c) => {
+          const id = c.commentid ?? c.comment_id ?? c.id ?? "";
           const name = c.name ?? c.nickname ?? c.user?.toString() ?? "?";
           const text = String(c.content ?? "").slice(0, 100);
-          const time = c.create_time ?? c.createTime ?? "";
-          return `[${time}] ${name}: ${text}`;
+          const time = c.create_time ?? c.createTime ?? c.createtime ?? "";
+          const uin = c.uin ?? c.commentuin ?? c.user_id ?? "";
+          const idPart = id ? ` (comment_id=${id}${uin ? ` uin=${uin}` : ""})` : "";
+          return `[${time}] ${name}: ${text}${idPart}`;
         });
-        return textResult(`评论 (${comments.length} 条):\n${lines.join("\n")}`);
+        const sourceNote = data?._source === "feeds3" ? `（来源：feeds3 兜底${typeof data?._feeds3_total === "number" ? `，共 ${data._feeds3_total} 条` : ""}）` : "";
+        return textResult(`评论 (${comments.length} 条)${sourceNote}:\n${lines.join("\n")}`);
       },
     },
 

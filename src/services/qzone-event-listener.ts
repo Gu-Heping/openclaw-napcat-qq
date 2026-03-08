@@ -156,12 +156,14 @@ export class QzoneEventListener {
     const userId = String(ev.user_id ?? "0");
     const nickname = ev.sender_name || "";
     const content = ev.comment_content ?? "";
-    const tid = ev.post_tid ?? "";
+    const tid = ev.post_tid ?? ev._tid ?? "";
+    const commentId = ev.comment_id ?? "";
 
     const who = nickname || userId;
     let text = `[QQ空间·评论] ${who} 评论了你的说说`;
     if (content) text += `：「${content.length > 200 ? content.slice(0, 200) + "…" : content}」`;
-    if (tid) text += `\n(说说ID: ${tid})`;
+    if (tid) text += `\ntid=${tid}`;
+    if (commentId && userId) text += `\n回复可传 reply_comment_id=${commentId} reply_uin=${userId}`;
 
     const detail = content ? `评论「${content.slice(0, 80)}」` : "评论了说说";
     this.dispatch("comment", userId, text, nickname, detail, tid);
@@ -170,11 +172,11 @@ export class QzoneEventListener {
   private dispatchLike(ev: QzoneEvent): void {
     const userId = String(ev.user_id ?? "0");
     const nickname = ev.sender_name || "";
-    const tid = ev.post_tid ?? "";
+    const tid = ev.post_tid ?? ev._tid ?? "";
 
     const who = nickname || userId;
     let text = `[QQ空间·点赞] ${who} 赞了你的说说`;
-    if (tid) text += `\n(说说ID: ${tid})`;
+    if (tid) text += `\ntid=${tid}`;
 
     this.dispatch("like", userId, text, nickname, "赞了说说", tid);
   }

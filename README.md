@@ -147,7 +147,7 @@ sudo systemctl restart openclaw-gateway
 - **信息查询**：`qq_get_stranger_info`、`qq_get_group_info`、`qq_get_user_avatar`、`qq_get_group_avatar`、`qq_get_friend_list`、`qq_get_group_list`、`qq_get_group_member_list`。
 - **群管理**：`qq_kick_group_member`、`qq_ban_group_member`、`qq_set_group_card`、`qq_set_group_name`。
 - **请求处理**：`qq_get_pending_requests`、`qq_handle_friend_request`、`qq_handle_group_request`。
-- **QQ 空间**（需 NapCat 接 [onebot-qzone](https://github.com/Gu-Heping/onebot-qzone) 桥接）：`qzone_get_friend_feeds`（好友最近说说，游标分页：首页不传 `cursor`，续页传上次返回的 `next_cursor`）、`qzone_get_posts`（指定用户说说）等。
+- **QQ 空间**（需 NapCat 接 [onebot-qzone](https://github.com/Gu-Heping/onebot-qzone) 桥接）：`qzone_get_friend_feeds`（好友最近说说，游标分页）、`qzone_get_posts`（指定用户说说）、`qzone_get_comments`（评论列表，PC/mobile 失败时使用 feeds3 兜底）、`qzone_comment`（发评论/回复评论）、`qzone_like`（点赞，仅需 tid）等。
 
 工具参数与说明见 **src/tools/** 下各文件的 `name`、`description` 与 `parameters`。
 

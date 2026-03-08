@@ -188,6 +188,7 @@ export function resolveConfig(raw?: Record<string, unknown>): BotConfig {
     accessToken: String(qzoneRaw.accessToken ?? ""),
     eventWsUrl: String(qzoneRaw.eventWsUrl ?? "ws://127.0.0.1:5700/"),
     notifyUserId: String(qzoneRaw.notifyUserId ?? ""),
+    // comment=评论通知 like=点赞通知 post=好友动态通知；需收好友动态时显式加 "post"
     notifyEvents: Array.isArray(qzoneRaw.notifyEvents)
       ? (qzoneRaw.notifyEvents as string[]).filter((e) => ["comment", "like", "post"].includes(e)) as ("comment" | "like" | "post")[]
       : ["comment", "like"],
