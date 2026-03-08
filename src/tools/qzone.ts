@@ -106,18 +106,20 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         if (!msglist?.length) return textResult("暂无说说");
 
         const lines = msglist.slice(0, num).map((msg) => {
-          const tid = msg.tid ?? "";
+          const tid = String(msg.tid ?? "");
           const uin = String(msg.uin ?? msg.owner ?? "").trim() || "?";
-          const text = String(msg.content ?? msg.con ?? "").slice(0, 80);
+          const rawContent = String(msg.content ?? msg.con ?? "");
+          const text = rawContent.slice(0, 80) + (rawContent.length > 80 ? "…" : "");
           const time = msg.created_time ?? msg.createTime ?? "";
           const cmtNum = msg.cmtnum ?? msg.commentnum ?? 0;
           const likeNum = msg.likenum ?? 0;
           const picArr = msg.pic as Array<{ url?: string }> | undefined;
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
           const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
-          return `[${time}] tid=${tid} uin=${uin} 💬${cmtNum} 👍${likeNum}\n  ${text}${String(msg.content ?? msg.con ?? "").length > 80 ? "…" : ""}${picLine}`;
+          const actionParams: Record<string, unknown> = { user_id: uin, tid };
+          return `[${time}] ${uin} 💬${cmtNum} 👍${likeNum}\n  ${text}${picLine}\n  操作参数: ${JSON.stringify(actionParams)}`;
         });
-        return textResult(`说说列表 (${msglist.length} 条，每条含 tid/uin)：\n\n${lines.join("\n\n")}`);
+        return textResult(`说说列表 (${msglist.length} 条):\n\n${lines.join("\n\n")}`);
       },
     },
 
@@ -150,18 +152,18 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论QQ空间说说。user_id=说说作者QQ号（评论自己的说说填${selfId}），tid=说说ID，content=评论内容。回复别人的评论可传reply_comment_id和reply_uin。非原创说说（如网易云分享）需传 appid（从事件 _appid 字段取得，如网易云=202）和 abstime（从事件 _abstime 字段取得）。`,
+      description: `评论说说。参数从 qzone_get_friend_feeds"操作参数"或推送事件中复制。原创说说传 user_id + tid + content；非原创（音乐分享等）还需 appid 和 abstime。评论自己的说说 user_id 填 ${selfId}。`,
       parameters: {
         type: "object",
         required: ["user_id", "tid", "content"],
         properties: {
-          user_id: { type: "string", description: `说说作者的QQ号（你自己的说说填 ${selfId}）` },
-          tid: { type: "string", description: "说说 ID（从 qzone_get_posts 或事件推送中获取）" },
+          user_id: { type: "string", description: "说说作者 QQ 号" },
+          tid: { type: "string", description: "说说 ID" },
           content: { type: "string", description: "评论内容" },
           reply_comment_id: { type: "string", description: "回复的评论 ID（可选）" },
           reply_uin: { type: "string", description: "回复的评论者 QQ 号（可选）" },
-          appid: { type: "number", description: "帖子类型 appid，默认 311（原创说说）；网易云分享=202，QQ音乐=2160，相册=2" },
-          abstime: { type: "number", description: "帖子发布时间戳（app 分享评论必须，从事件 _abstime 字段获取）" },
+          appid: { type: "number", description: "帖子类型（原创=311 可省略；音乐分享=202）" },
+          abstime: { type: "number", description: "帖子时间戳（非原创必须，从操作参数中获取）" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
@@ -186,17 +188,17 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 5. qzone_like ──
     {
       name: "qzone_like",
-      description: `点赞QQ空间说说。user_id=说说作者QQ号（你自己的说说填${selfId}），tid=说说ID。非原创说说（如网易云分享）需传 appid（从事件 _appid 字段取得，如网易云=202）、typeid（从 _typeid 字段取得，如网易云=2）、like_unikey（从 _like_unikey 字段取得，是分享链接URL）和 like_curkey（从 _like_curkey 字段取得）。这些字段在好友动态推送事件中会自动附带。`,
+      description: `给说说点赞。参数直接从 qzone_get_friend_feeds 返回的"操作参数"或推送事件的 extra 字段中复制即可。原创说说只需 user_id + tid；非原创（音乐分享/转发等）还需 appid、typeid、like_unikey、like_curkey。`,
       parameters: {
         type: "object",
         required: ["user_id", "tid"],
         properties: {
-          user_id: { type: "string", description: `说说作者的QQ号（你自己的填 ${selfId}）` },
+          user_id: { type: "string", description: "说说作者 QQ 号" },
           tid: { type: "string", description: "说说 ID" },
-          appid: { type: "number", description: "帖子类型 appid，默认 311（原创说说）；网易云分享=202，QQ音乐=2160，相册=2" },
-          typeid: { type: "number", description: "帖子 typeid，默认 0；网易云分享=2。从事件 _typeid 字段获取" },
-          like_unikey: { type: "string", description: "点赞 unikey（app 分享帖子为分享链接 URL，从事件 _like_unikey 字段获取）" },
-          like_curkey: { type: "string", description: "点赞 curkey（从事件 _like_curkey 字段获取）" },
+          appid: { type: "number", description: "帖子类型（原创说说=311 可省略；音乐分享=202，转发=311+typeid=5）" },
+          typeid: { type: "number", description: "帖子子类型（原创=0，转发=5，音乐=2）" },
+          like_unikey: { type: "string", description: "点赞 key（音乐分享为歌曲链接 URL，转发为原帖 URL）" },
+          like_curkey: { type: "string", description: "点赞 curkey" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
@@ -285,7 +287,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 8. qzone_get_friend_feeds ──
     {
       name: "qzone_get_friend_feeds",
-      description: "获取QQ空间好友最近说说（原创帖子，过滤掉点赞/转发活动）。支持翻页：首页不传 cursor；翻下一页时把上次结果末尾的 next_cursor 传入。",
+      description: "获取好友最近动态。每条返回完整操作参数，可直接传给 qzone_like / qzone_comment。翻页传上次结果的 next_cursor。",
       parameters: {
         type: "object",
         properties: {
@@ -312,20 +314,45 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
 
         const lines = feeds.map((f) => {
           const name = f.name ?? f.nickname ?? f.uin ?? "?";
-          const tid = f.tid ?? "";
+          const tid = String(f.tid ?? "");
           const uin = String(f.uin ?? "");
-          const text = String(f.content ?? f.con ?? "").slice(0, 80);
+          const rawContent = String(f.content ?? f.con ?? "");
+          const text = rawContent.slice(0, 80) + (rawContent.length > 80 ? "…" : "");
           const time = f.created_time ?? f.createTime ?? "";
           const picArr = f.pic as Array<{ url?: string }> | undefined;
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
           const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
-          return `[${time}] ${name}(${uin})${tid ? ` tid=${tid}` : ""}: ${text}${String(f.content ?? f.con ?? "").length > 80 ? "…" : ""}${picLine}`;
+
+          const appid = String(f.appid ?? "311");
+          const typeid = String(f.typeid ?? "0");
+          const abstime = String(f.created_time ?? f.createTime ?? "0");
+          const likeUnikey = String(f.likeUnikey ?? "");
+          const likeCurkey = String(f.likeCurkey ?? "");
+          const appShareTitle = String(f.appShareTitle ?? "");
+          const appName = String(f.appName ?? "");
+
+          const fwdContent = f.rt_con ? String(typeof f.rt_con === 'object' ? (f.rt_con as Record<string, unknown>).content ?? '' : f.rt_con) : '';
+          const fwdName = String(f.rt_uinname ?? "");
+          const fwdLine = fwdContent ? `\n  转发自 ${fwdName}: ${fwdContent.slice(0, 60)}` : "";
+          const appLine = appName && appName !== '说说' ? `\n  [${appName}]${appShareTitle ? ' ' + appShareTitle : ''}` : '';
+
+          // 操作参数块：agent 可直接复制到 qzone_like / qzone_comment
+          const actionParams: Record<string, unknown> = { user_id: uin, tid };
+          if (appid !== "311") {
+            actionParams.appid = Number(appid);
+            actionParams.typeid = Number(typeid);
+            actionParams.abstime = Number(abstime);
+            if (likeUnikey) actionParams.like_unikey = likeUnikey;
+            if (likeCurkey) actionParams.like_curkey = likeCurkey;
+          }
+
+          return `${name}(${uin}) [${time}]: ${text}${appLine}${fwdLine}${picLine}\n  操作参数: ${JSON.stringify(actionParams)}`;
         });
         const pageLabel = cursor ? "（续页）" : "第1页";
         const nextLine = nextCursor
-          ? `\n\n要看下一页，传 cursor: ${nextCursor}`
+          ? `\n\n要看下一页，传 cursor="${nextCursor}"`
           : "\n\n（没有更多了）";
-        return textResult(`好友说说 ${pageLabel} (${feeds.length} 条):\n\n${lines.join("\n\n")}${nextLine}`);
+        return textResult(`好友动态 ${pageLabel} (${feeds.length} 条):\n\n${lines.join("\n\n")}${nextLine}`);
       },
     },
 
