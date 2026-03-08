@@ -109,8 +109,10 @@ export class QzoneAPI {
     return this.request("get_comment_list", { user_id: userId, tid, num, pos });
   }
 
-  deleteComment(uin: string, tid: string, commentId: string) {
-    return this.request("delete_comment", { uin, tid, comment_id: commentId });
+  deleteComment(uin: string, tid: string, commentId: string, commentUin?: string) {
+    const d: Record<string, unknown> = { uin, tid, comment_id: commentId };
+    if (commentUin) d.comment_uin = commentUin;
+    return this.request("delete_comment", d);
   }
 
   // ── 点赞 ──

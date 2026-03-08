@@ -250,6 +250,33 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       },
     },
 
+    // ── 6.5 qzone_delete_comment ──
+    {
+      name: "qzone_delete_comment",
+      description: "删除某条说说的评论。必填 tid（说说ID）、comment_id（评论ID）。user_id=说说作者QQ号（可选，桥接可自动补全）；comment_uin=被删评论的作者QQ号（可选，部分接口需要）。评论ID从 qzone_get_comments 返回或评论通知中获取。",
+      parameters: {
+        type: "object",
+        required: ["tid", "comment_id"],
+        properties: {
+          tid: { type: "string", description: "说说 ID" },
+          comment_id: { type: "string", description: "要删除的评论 ID" },
+          user_id: { type: "string", description: "说说作者 QQ 号（可选）" },
+          comment_uin: { type: "string", description: "被删评论的作者 QQ 号（可选）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const tid = String(params.tid ?? "");
+        const commentId = String(params.comment_id ?? "");
+        if (!tid || !commentId) return textResult("[错误] 缺少 tid 或 comment_id");
+        const uin = params.user_id ? String(params.user_id) : "";
+        const commentUin = params.comment_uin ? String(params.comment_uin) : undefined;
+        const res = await ctx.qzoneApi!.deleteComment(uin, tid, commentId, commentUin);
+        return textResult(formatResponse(res, "已删除评论"));
+      },
+    },
+
     // ── 7. qzone_get_visitors ──
     {
       name: "qzone_get_visitors",
