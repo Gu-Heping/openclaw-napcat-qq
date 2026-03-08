@@ -151,7 +151,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论说说。只需传 tid 和 content，服务端自动补全其他参数。评论自己的说说可加 user_id=${selfId}。`,
+      description: `评论说说；也可回复某条评论（传 reply_comment_id 与 reply_uin）。必填 tid、content，服务端自动补全其他参数。评论自己的说说可加 user_id=${selfId}。`,
       parameters: {
         type: "object",
         required: ["tid", "content"],
@@ -159,8 +159,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           tid: { type: "string", description: "说说 ID" },
           content: { type: "string", description: "评论内容" },
           user_id: { type: "string", description: "说说作者 QQ 号（可选，服务端可自动识别）" },
-          reply_comment_id: { type: "string", description: "回复的评论 ID（可选）" },
-          reply_uin: { type: "string", description: "回复的评论者 QQ 号（可选）" },
+          reply_comment_id: { type: "string", description: "要回复的那条评论的 ID（从 qzone_get_comments 或评论通知中获取）；与 reply_uin 同时传则发为回复评论" },
+          reply_uin: { type: "string", description: "要回复的那条评论的作者 QQ 号，须与 reply_comment_id 成对传入" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
