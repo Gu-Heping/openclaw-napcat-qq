@@ -97,10 +97,12 @@ export class QzoneAPI {
   }
 
   // ── 评论 ──
-  sendComment(targetUin: string, tid: string, content: string, replyCommentId?: string, replyUin?: string) {
+  sendComment(targetUin: string, tid: string, content: string, replyCommentId?: string, replyUin?: string, appid?: number, abstime?: number) {
     const d: Record<string, unknown> = { target_uin: targetUin, target_tid: tid, content };
     if (replyCommentId) d.reply_comment_id = replyCommentId;
     if (replyUin) d.reply_uin = replyUin;
+    if (appid != null && appid !== 311) d.appid = appid;
+    if (abstime) d.abstime = abstime;
     return this.request("send_comment", d);
   }
 
@@ -113,8 +115,13 @@ export class QzoneAPI {
   }
 
   // ── 点赞 ──
-  sendLike(userId: string, tid: string, abstime = 0) {
-    return this.request("send_like", { user_id: userId, tid, abstime });
+  sendLike(userId: string, tid: string, abstime = 0, appid?: number, typeid?: number, unikey?: string, curkey?: string) {
+    const d: Record<string, unknown> = { user_id: userId, tid, abstime };
+    if (appid != null && appid !== 311) d.appid = appid;
+    if (typeid != null) d.typeid = typeid;
+    if (unikey) d.unikey = unikey;
+    if (curkey) d.curkey = curkey;
+    return this.request("send_like", d);
   }
 
   getLikeList(userId: string, tid: string) {

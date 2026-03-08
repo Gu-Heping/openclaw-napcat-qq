@@ -150,7 +150,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论QQ空间说说。user_id=说说作者QQ号（评论自己的说说填${selfId}），tid=说说ID，content=评论内容。回复别人的评论可传reply_comment_id和reply_uin`,
+      description: `评论QQ空间说说。user_id=说说作者QQ号（评论自己的说说填${selfId}），tid=说说ID，content=评论内容。回复别人的评论可传reply_comment_id和reply_uin。非原创说说（如网易云分享）需传 appid（从事件 _appid 字段取得，如网易云=202）和 abstime（从事件 _abstime 字段取得）。`,
       parameters: {
         type: "object",
         required: ["user_id", "tid", "content"],
@@ -160,6 +160,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           content: { type: "string", description: "评论内容" },
           reply_comment_id: { type: "string", description: "回复的评论 ID（可选）" },
           reply_uin: { type: "string", description: "回复的评论者 QQ 号（可选）" },
+          appid: { type: "number", description: "帖子类型 appid，默认 311（原创说说）；网易云分享=202，QQ音乐=2160，相册=2" },
+          abstime: { type: "number", description: "帖子发布时间戳（app 分享评论必须，从事件 _abstime 字段获取）" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
@@ -172,7 +174,9 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         log.info?.(`[QZone-Tool] qzone_comment called: user_id=${userId} tid=${tid} content=${content.slice(0, 40)}`);
         const replyId = params.reply_comment_id ? String(params.reply_comment_id) : undefined;
         const replyUin = params.reply_uin ? String(params.reply_uin) : undefined;
-        const res = await ctx.qzoneApi!.sendComment(userId, tid, content, replyId, replyUin);
+        const appid = params.appid != null ? Number(params.appid) : undefined;
+        const abstime = params.abstime != null ? Number(params.abstime) : undefined;
+        const res = await ctx.qzoneApi!.sendComment(userId, tid, content, replyId, replyUin, appid, abstime);
         const result = formatResponse(res, "评论成功");
         log.info?.(`[QZone-Tool] qzone_comment result: ${result.slice(0, 80)}`);
         return textResult(result);
@@ -182,13 +186,17 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 5. qzone_like ──
     {
       name: "qzone_like",
-      description: `点赞QQ空间说说。user_id=说说作者QQ号（你自己的说说填${selfId}），tid=说说ID`,
+      description: `点赞QQ空间说说。user_id=说说作者QQ号（你自己的说说填${selfId}），tid=说说ID。非原创说说（如网易云分享）需传 appid（从事件 _appid 字段取得，如网易云=202）、typeid（从 _typeid 字段取得，如网易云=2）、like_unikey（从 _like_unikey 字段取得，是分享链接URL）和 like_curkey（从 _like_curkey 字段取得）。这些字段在好友动态推送事件中会自动附带。`,
       parameters: {
         type: "object",
         required: ["user_id", "tid"],
         properties: {
           user_id: { type: "string", description: `说说作者的QQ号（你自己的填 ${selfId}）` },
           tid: { type: "string", description: "说说 ID" },
+          appid: { type: "number", description: "帖子类型 appid，默认 311（原创说说）；网易云分享=202，QQ音乐=2160，相册=2" },
+          typeid: { type: "number", description: "帖子 typeid，默认 0；网易云分享=2。从事件 _typeid 字段获取" },
+          like_unikey: { type: "string", description: "点赞 unikey（app 分享帖子为分享链接 URL，从事件 _like_unikey 字段获取）" },
+          like_curkey: { type: "string", description: "点赞 curkey（从事件 _like_curkey 字段获取）" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
@@ -197,7 +205,11 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const userId = String(params.user_id ?? "");
         const tid = String(params.tid ?? "");
         if (!userId || !tid) return textResult("[错误] 缺少 user_id 或 tid");
-        const res = await ctx.qzoneApi!.sendLike(userId, tid);
+        const appid = params.appid != null ? Number(params.appid) : undefined;
+        const typeid = params.typeid != null ? Number(params.typeid) : undefined;
+        const unikey = params.like_unikey ? String(params.like_unikey) : undefined;
+        const curkey = params.like_curkey ? String(params.like_curkey) : undefined;
+        const res = await ctx.qzoneApi!.sendLike(userId, tid, 0, appid, typeid, unikey, curkey);
         return textResult(formatResponse(res, "点赞成功"));
       },
     },
