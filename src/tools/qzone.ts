@@ -206,13 +206,13 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 6. qzone_get_comments ──
     {
       name: "qzone_get_comments",
-      description: `获取说说的评论列表。user_id=说说作者QQ号，tid=说说ID。服务端会先尝试 PC/mobile 接口，失败时使用 feeds3 兜底（仅限曾通过动态流拉过的说说）。`,
+      description: `获取说说的评论列表。必填：user_id=该条说说的作者QQ号（不是 bot；「我的说说」填当前对话人的 QQ），tid=说说 ID（来自 qzone_get_posts 或动态事件的 tid，若只有 abstime 数字桥接会自动解析）。服务端先试 PC/mobile，失败时用 feeds3 兜底。`,
       parameters: {
         type: "object",
         required: ["user_id", "tid"],
         properties: {
-          user_id: { type: "string", description: "说说作者的 QQ 号" },
-          tid: { type: "string", description: "说说 ID" },
+          user_id: { type: "string", description: "该条说说的作者 QQ 号（「我的说说」填对方/user 的 QQ）" },
+          tid: { type: "string", description: "说说 ID（key 或 abstime，桥接会自动把 abstime 转成 key）" },
           count: { type: "number", description: "获取条数，默认 20" },
         },
       },
