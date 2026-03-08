@@ -116,8 +116,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const picArr = msg.pic as Array<{ url?: string }> | undefined;
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
           const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
-          const actionParams: Record<string, unknown> = { user_id: uin, tid };
-          return `[${time}] ${uin} 💬${cmtNum} 👍${likeNum}\n  ${text}${picLine}\n  操作参数: ${JSON.stringify(actionParams)}`;
+          return `[${time}] tid=${tid} ${uin} 💬${cmtNum} 👍${likeNum}\n  ${text}${picLine}`;
         });
         return textResult(`说说列表 (${msglist.length} 条):\n\n${lines.join("\n\n")}`);
       },
@@ -152,33 +151,29 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论说说。参数从 qzone_get_friend_feeds"操作参数"或推送事件中复制。原创说说传 user_id + tid + content；非原创（音乐分享等）还需 appid 和 abstime。评论自己的说说 user_id 填 ${selfId}。`,
+      description: `评论说说。只需传 tid 和 content，服务端自动补全其他参数。评论自己的说说可加 user_id=${selfId}。`,
       parameters: {
         type: "object",
-        required: ["user_id", "tid", "content"],
+        required: ["tid", "content"],
         properties: {
-          user_id: { type: "string", description: "说说作者 QQ 号" },
           tid: { type: "string", description: "说说 ID" },
           content: { type: "string", description: "评论内容" },
+          user_id: { type: "string", description: "说说作者 QQ 号（可选，服务端可自动识别）" },
           reply_comment_id: { type: "string", description: "回复的评论 ID（可选）" },
           reply_uin: { type: "string", description: "回复的评论者 QQ 号（可选）" },
-          appid: { type: "number", description: "帖子类型（原创=311 可省略；音乐分享=202）" },
-          abstime: { type: "number", description: "帖子时间戳（非原创必须，从操作参数中获取）" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
         const err = guard();
         if (err) return textResult(err);
-        const userId = String(params.user_id ?? "");
         const tid = String(params.tid ?? "");
         const content = String(params.content ?? "");
-        if (!userId || !tid || !content) return textResult("[错误] 缺少 user_id / tid / content");
-        log.info?.(`[QZone-Tool] qzone_comment called: user_id=${userId} tid=${tid} content=${content.slice(0, 40)}`);
+        if (!tid || !content) return textResult("[错误] 缺少 tid / content");
+        const userId = params.user_id ? String(params.user_id) : undefined;
+        log.info?.(`[QZone-Tool] qzone_comment called: tid=${tid} content=${content.slice(0, 40)}`);
         const replyId = params.reply_comment_id ? String(params.reply_comment_id) : undefined;
         const replyUin = params.reply_uin ? String(params.reply_uin) : undefined;
-        const appid = params.appid != null ? Number(params.appid) : undefined;
-        const abstime = params.abstime != null ? Number(params.abstime) : undefined;
-        const res = await ctx.qzoneApi!.sendComment(userId, tid, content, replyId, replyUin, appid, abstime);
+        const res = await ctx.qzoneApi!.sendComment(tid, content, userId, replyId, replyUin);
         const result = formatResponse(res, "评论成功");
         log.info?.(`[QZone-Tool] qzone_comment result: ${result.slice(0, 80)}`);
         return textResult(result);
@@ -188,30 +183,22 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 5. qzone_like ──
     {
       name: "qzone_like",
-      description: `给说说点赞。参数直接从 qzone_get_friend_feeds 返回的"操作参数"或推送事件的 extra 字段中复制即可。原创说说只需 user_id + tid；非原创（音乐分享/转发等）还需 appid、typeid、like_unikey、like_curkey。`,
+      description: `给说说点赞。只需传 tid，服务端自动从缓存补全所有参数（appid/typeid/unikey/curkey 等）。`,
       parameters: {
         type: "object",
-        required: ["user_id", "tid"],
+        required: ["tid"],
         properties: {
-          user_id: { type: "string", description: "说说作者 QQ 号" },
           tid: { type: "string", description: "说说 ID" },
-          appid: { type: "number", description: "帖子类型（原创说说=311 可省略；音乐分享=202，转发=311+typeid=5）" },
-          typeid: { type: "number", description: "帖子子类型（原创=0，转发=5，音乐=2）" },
-          like_unikey: { type: "string", description: "点赞 key（音乐分享为歌曲链接 URL，转发为原帖 URL）" },
-          like_curkey: { type: "string", description: "点赞 curkey" },
+          user_id: { type: "string", description: "说说作者 QQ 号（可选，服务端可自动识别）" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
         const err = guard();
         if (err) return textResult(err);
-        const userId = String(params.user_id ?? "");
         const tid = String(params.tid ?? "");
-        if (!userId || !tid) return textResult("[错误] 缺少 user_id 或 tid");
-        const appid = params.appid != null ? Number(params.appid) : undefined;
-        const typeid = params.typeid != null ? Number(params.typeid) : undefined;
-        const unikey = params.like_unikey ? String(params.like_unikey) : undefined;
-        const curkey = params.like_curkey ? String(params.like_curkey) : undefined;
-        const res = await ctx.qzoneApi!.sendLike(userId, tid, 0, appid, typeid, unikey, curkey);
+        if (!tid) return textResult("[错误] 缺少 tid");
+        const userId = params.user_id ? String(params.user_id) : undefined;
+        const res = await ctx.qzoneApi!.sendLike(tid, userId);
         return textResult(formatResponse(res, "点赞成功"));
       },
     },
@@ -323,30 +310,14 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
           const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
 
-          const appid = String(f.appid ?? "311");
-          const typeid = String(f.typeid ?? "0");
-          const abstime = String(f.created_time ?? f.createTime ?? "0");
-          const likeUnikey = String(f.likeUnikey ?? "");
-          const likeCurkey = String(f.likeCurkey ?? "");
           const appShareTitle = String(f.appShareTitle ?? "");
           const appName = String(f.appName ?? "");
-
           const fwdContent = f.rt_con ? String(typeof f.rt_con === 'object' ? (f.rt_con as Record<string, unknown>).content ?? '' : f.rt_con) : '';
           const fwdName = String(f.rt_uinname ?? "");
           const fwdLine = fwdContent ? `\n  转发自 ${fwdName}: ${fwdContent.slice(0, 60)}` : "";
           const appLine = appName && appName !== '说说' ? `\n  [${appName}]${appShareTitle ? ' ' + appShareTitle : ''}` : '';
 
-          // 操作参数块：agent 可直接复制到 qzone_like / qzone_comment
-          const actionParams: Record<string, unknown> = { user_id: uin, tid };
-          if (appid !== "311") {
-            actionParams.appid = Number(appid);
-            actionParams.typeid = Number(typeid);
-            actionParams.abstime = Number(abstime);
-            if (likeUnikey) actionParams.like_unikey = likeUnikey;
-            if (likeCurkey) actionParams.like_curkey = likeCurkey;
-          }
-
-          return `${name}(${uin}) [${time}]: ${text}${appLine}${fwdLine}${picLine}\n  操作参数: ${JSON.stringify(actionParams)}`;
+          return `${name}(${uin}) [${time}] tid=${tid}: ${text}${appLine}${fwdLine}${picLine}`;
         });
         const pageLabel = cursor ? "（续页）" : "第1页";
         const nextLine = nextCursor

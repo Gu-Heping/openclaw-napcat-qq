@@ -185,18 +185,14 @@ export class QzoneEventListener {
     const content = ev.raw_message ?? "";
     const pics = ev._pics ?? [];
     const tid = ev._tid ?? "";
-    const appid = ev._appid ?? "311";
-    const typeid = ev._typeid ?? "0";
-    const abstime = ev._abstime ?? ev.time ?? 0;
     const appName = ev._app_name ?? "";
     const appShareTitle = ev._app_share_title ?? "";
-    const likeUnikey = ev._like_unikey ?? "";
-    const likeCurkey = ev._like_curkey ?? "";
     const fwdContent = ev._forward_content ?? "";
     const fwdNickname = ev._forward_nickname ?? "";
+    const appid = ev._appid ?? "311";
+    const isAppShare = appid !== "311" && appid !== "";
 
     const who = nickname || userId;
-    const isAppShare = appid !== "311" && appid !== "";
     const typeLabel = isAppShare && appName ? `[${appName}]` : fwdContent ? "[转发]" : "[说说]";
 
     let text = `[QQ空间·好友动态] ${who} 发布了新动态 ${typeLabel}`;
@@ -204,21 +200,7 @@ export class QzoneEventListener {
     if (appShareTitle && appShareTitle !== content) text += `\n分享标题: ${appShareTitle}`;
     if (fwdContent) text += `\n转发自 ${fwdNickname}: ${fwdContent.slice(0, 100)}`;
     if (pics.length > 0) text += `\n(包含 ${pics.length} 张图片)`;
-
-    // 操作参数：agent 可直接复制到 qzone_like / qzone_comment
-    const actionParams: Record<string, unknown> = { user_id: userId, tid };
-    if (isAppShare) {
-      actionParams.appid = Number(appid);
-      actionParams.typeid = Number(typeid);
-      actionParams.abstime = abstime;
-      if (likeUnikey) actionParams.like_unikey = likeUnikey;
-      if (likeCurkey) actionParams.like_curkey = likeCurkey;
-    } else if (typeid === "5" && fwdContent) {
-      actionParams.typeid = 5;
-      if (likeUnikey) actionParams.like_unikey = likeUnikey;
-      if (likeCurkey) actionParams.like_curkey = likeCurkey;
-    }
-    text += `\n操作参数: ${JSON.stringify(actionParams)}`;
+    if (tid) text += `\ntid=${tid}`;
 
     const detail = content ? `发布「${content.slice(0, 80)}」` : "发布了新动态";
     this.dispatch("post", userId, text, nickname, detail, tid);
