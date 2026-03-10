@@ -16,6 +16,14 @@ interface QzoneEvent {
   raw_message?: string;
   comment_content?: string;
   comment_id?: string;
+  /** 是否为二级评论（回复） */
+  _is_reply?: boolean;
+  /** 被回复者 QQ 号（二级评论） */
+  _reply_to_uin?: string | number;
+  /** 被回复者昵称（二级评论） */
+  _reply_to_nickname?: string;
+  /** 父评论 ID（二级评论所属的一级评论） */
+  _parent_comment_id?: string;
   post_uin?: number;
   post_tid?: string;
   _tid?: string;
@@ -158,14 +166,20 @@ export class QzoneEventListener {
     const content = ev.comment_content ?? "";
     const tid = ev.post_tid ?? ev._tid ?? "";
     const commentId = ev.comment_id ?? "";
+    const isReply = ev._is_reply ?? false;
+    const replyToNickname = ev._reply_to_nickname ?? "";
+    const replyToUin = ev._reply_to_uin != null ? String(ev._reply_to_uin) : "";
+    const parentCommentId = ev._parent_comment_id ?? "";
 
     const who = nickname || userId;
-    let text = `[QQ空间·评论] ${who} 评论了你的说说`;
+    const replyTarget = replyToNickname || replyToUin;
+    let text = `[QQ空间·评论] ${who} ${isReply && replyTarget ? `回复了 @${replyTarget} 的评论` : "评论了你的说说"}`;
     if (content) text += `：「${content.length > 200 ? content.slice(0, 200) + "…" : content}」`;
     if (tid) text += `\ntid=${tid}`;
     if (commentId && userId) text += `\n回复可传 reply_comment_id=${commentId} reply_uin=${userId}`;
+    if (parentCommentId && isReply) text += `（父评论 id=${parentCommentId}）`;
 
-    const detail = content ? `评论「${content.slice(0, 80)}」` : "评论了说说";
+    const detail = content ? `评论「${content.slice(0, 80)}」` : isReply && replyTarget ? `回复 @${replyTarget}` : "评论了说说";
     this.dispatch("comment", userId, text, nickname, detail, tid);
   }
 

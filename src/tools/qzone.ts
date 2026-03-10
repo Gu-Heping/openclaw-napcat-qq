@@ -242,8 +242,17 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const text = String(c.content ?? "").slice(0, 100);
           const time = c.create_time ?? c.createTime ?? c.createtime ?? "";
           const uin = c.uin ?? c.commentuin ?? c.user_id ?? "";
-          const idPart = id ? ` (comment_id=${id}${uin ? ` uin=${uin}` : ""})` : "";
-          return `[${time}] ${name}: ${text}${idPart}`;
+          // 二级评论：feeds3 返回 is_reply / reply_to_nickname / reply_to_uin / parent_comment_id
+          const isReply = c.is_reply ?? c.isReply ?? false;
+          const replyToNick = (c.reply_to_nickname ?? c.replyToNickname ?? "") as string;
+          const replyToUin = (c.reply_to_uin ?? c.replyToUin ?? "") as string;
+          const parentId = (c.parent_comment_id ?? c.parentCommentId ?? "") as string;
+          const replyToCommentId = (c.reply_to_comment_id ?? c.replyToCommentId ?? "") as string;
+          const replyPrefix = isReply && (replyToNick || replyToUin)
+            ? ` 回复 @${replyToNick || replyToUin}:`
+            : "";
+          const idPart = id ? ` (comment_id=${id}${uin ? ` uin=${uin}` : ""}${parentId ? ` parent_id=${parentId}` : ""})` : "";
+          return `[${time}] ${name}:${replyPrefix} ${text}${idPart}`;
         });
         const sourceNote = data?._source === "feeds3" ? `（来源：feeds3 兜底${typeof data?._feeds3_total === "number" ? `，共 ${data._feeds3_total} 条` : ""}）` : "";
         return textResult(`评论 (${comments.length} 条)${sourceNote}:\n${lines.join("\n")}`);
