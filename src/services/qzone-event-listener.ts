@@ -176,7 +176,7 @@ export class QzoneEventListener {
     let text = `[QQ空间·评论] ${who} ${isReply && replyTarget ? `回复了 @${replyTarget} 的评论` : "评论了你的说说"}`;
     if (content) text += `：「${content.length > 200 ? content.slice(0, 200) + "…" : content}」`;
     if (tid) text += `\ntid=${tid}`;
-    if (commentId && userId) text += `\n回复可传 reply_comment_id=${commentId} reply_uin=${userId}`;
+    if (commentId && userId) text += `\n回复可传 reply_comment_id=${commentId} reply_uin=${userId}（content 只写正文，@ 由服务端自动加）`;
     if (parentCommentId && isReply) text += `（父评论 id=${parentCommentId}）`;
 
     const detail = content ? `评论「${content.slice(0, 80)}」` : isReply && replyTarget ? `回复 @${replyTarget}` : "评论了说说";

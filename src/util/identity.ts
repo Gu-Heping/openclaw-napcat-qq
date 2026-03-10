@@ -25,7 +25,7 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
 
   if (msg.content?.startsWith("[QQ空间")) {
     const myQQ = opts?.selfId || userId;
-    lines.push(`[QQ空间事件] 这是QQ空间推送。你可以用 qzone_comment(user_id="${myQQ}", tid=..., content=...) 回复评论，qzone_like 点赞回赞，qzone_get_comments 查看完整评论。说说ID(tid)在消息中。互动日志: memory/qzone/feeds/`);
+    lines.push(`[QQ空间事件] 这是QQ空间推送。回复评论用 qzone_comment(tid=..., content=..., reply_comment_id=..., reply_uin=...)（消息里会给出 reply_comment_id/reply_uin，content 只写正文、@ 由服务端自动加），qzone_like 点赞，qzone_get_comments 查看评论。互动日志: memory/qzone/feeds/`);
   }
 
   return lines.join("\n");

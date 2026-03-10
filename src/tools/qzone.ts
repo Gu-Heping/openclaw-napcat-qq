@@ -151,16 +151,16 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论说说；也可回复某条评论（传 reply_comment_id 与 reply_uin）。必填 tid、content，服务端自动补全其他参数。评论自己的说说可加 user_id=${selfId}。`,
+      description: `评论说说；也可回复某条评论（传 reply_comment_id 与 reply_uin）。必填 tid、content。回复时服务端会自动添加 @提及 格式，content 只需写回复正文。评论自己的说说可加 user_id=${selfId}。`,
       parameters: {
         type: "object",
         required: ["tid", "content"],
         properties: {
           tid: { type: "string", description: "说说 ID" },
-          content: { type: "string", description: "评论内容" },
+          content: { type: "string", description: "评论内容（回复时无需写 @某人，服务端自动加）" },
           user_id: { type: "string", description: "说说作者 QQ 号（可选，服务端可自动识别）" },
-          reply_comment_id: { type: "string", description: "要回复的那条评论的 ID（从 qzone_get_comments 或评论通知中获取）；与 reply_uin 同时传则发为回复评论" },
-          reply_uin: { type: "string", description: "要回复的那条评论的作者 QQ 号，须与 reply_comment_id 成对传入" },
+          reply_comment_id: { type: "string", description: "要回复的那条评论的 ID（与 qzone_get_comments 返回的 comment_id 或评论通知中的 reply_comment_id 一致）；与 reply_uin 成对传入即发为回复" },
+          reply_uin: { type: "string", description: "被回复评论的作者 QQ 号，须与 reply_comment_id 成对传入" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
@@ -252,7 +252,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
             ? ` 回复 @${replyToNick || replyToUin}:`
             : "";
           const idPart = id ? ` (comment_id=${id}${uin ? ` uin=${uin}` : ""}${parentId ? ` parent_id=${parentId}` : ""})` : "";
-          return `[${time}] ${name}:${replyPrefix} ${text}${idPart}`;
+          const replyHint = id && uin ? ` | 回复此条: reply_comment_id=${id} reply_uin=${uin}` : "";
+          return `[${time}] ${name}:${replyPrefix} ${text}${idPart}${replyHint}`;
         });
         const sourceNote = data?._source === "feeds3" ? `（来源：feeds3 兜底${typeof data?._feeds3_total === "number" ? `，共 ${data._feeds3_total} 条` : ""}）` : "";
         return textResult(`评论 (${comments.length} 条)${sourceNote}:\n${lines.join("\n")}`);
