@@ -4,6 +4,7 @@ import type { OneBotNoticeEvent, OneBotRequestEvent, QQMessage } from "../napcat
 import type { InboundHandler } from "./inbound.js";
 import type { FileDownloader } from "../services/file-downloader.js";
 import type { PluginLogger } from "../types-compat.js";
+import { getSyntheticMessageId } from "../util/synthetic-id.js";
 
 interface PendingRequest {
   type: "friend" | "group";
@@ -103,12 +104,11 @@ export class EventHandler {
     const pokeText = typeof raw === "string" ? raw.trim() : "";
     const content = pokeText ? `[用户戳了戳你，并说：${pokeText}]` : "[用户戳了戳你]";
 
-    const msgId = `poke_${userId}_${groupId ?? "pv"}_${Date.now()}`;
     this.ctx.log.info?.(`[QQ] 戳一戳 → AI: ${userId}${groupId ? ` 群${groupId}` : ""}`);
     this.ctx.inbound.handleMessageEvent({
       post_type: "message",
       message_type: groupId ? "group" : "private",
-      message_id: 0,
+      message_id: getSyntheticMessageId(),
       user_id: Number(userId),
       group_id: groupId ? Number(groupId) : undefined,
       message: [{ type: "text", data: { text: content } }],
@@ -157,7 +157,7 @@ export class EventHandler {
     this.ctx.inbound.handleMessageEvent({
       post_type: "message",
       message_type: "private",
-      message_id: 0,
+      message_id: getSyntheticMessageId(),
       user_id: Number(userId),
       message: [{ type: "text", data: { text: fileInfo } }],
       raw_message: fileInfo,

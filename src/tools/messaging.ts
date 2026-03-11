@@ -1,6 +1,7 @@
 import type { AnyAgentTool, AgentToolResult } from "../types-compat.js";
 import type { PluginContext } from "../context.js";
 import { convertPlainAtToCq, expandInlineFaces } from "../util/cq-code.js";
+import { appendAssistantMessageToSessionFile } from "../util/session-append.js";
 
 function textResult(text: string): AgentToolResult {
   return { content: [{ type: "text", text }] };
@@ -10,7 +11,7 @@ export function createMessagingTools(ctx: PluginContext): AnyAgentTool[] {
   return [
     {
       name: "qq_send_message",
-      description: "发送 QQ 私聊消息。message 内可写 [表情:名称]。",
+      description: "发送 QQ 私聊消息。message 内可写 [表情:名称]。若对方已有会话，该条会写入对方会话历史，对方后续对话时 AI 可见。",
       parameters: {
         type: "object", required: ["user_id", "message"],
         properties: {
@@ -25,16 +26,27 @@ export function createMessagingTools(ctx: PluginContext): AnyAgentTool[] {
         if (!userId || !message) return textResult("[错误] 缺少 user_id 或 message");
         const content = expandInlineFaces(message);
         const result = await ctx.api.sendPrivateMsg(userId, content);
-        if (result.status === "ok" && ctx.msgManager) {
-          const msgId = (result.data as Record<string, unknown>)?.message_id;
-          if (msgId) ctx.msgManager.add(String(msgId), `p:${userId}`, message, "private", userId);
+        if (result.status === "ok") {
+          if (ctx.msgManager) {
+            const msgId = (result.data as Record<string, unknown>)?.message_id;
+            if (msgId) ctx.msgManager.add(String(msgId), `p:${userId}`, message, "private", userId);
+          }
+          if (ctx.resolveSessionKeyForPeer && ctx.sessionStore) {
+            try {
+              const sessionKey = ctx.resolveSessionKeyForPeer(userId, false);
+              const sessionFile = ctx.sessionStore.getSessionFilePath(sessionKey);
+              if (sessionFile) appendAssistantMessageToSessionFile(sessionFile, message);
+            } catch (e) {
+              ctx.log.warn?.(`[QQ] Record outbound to session failed: ${e}`);
+            }
+          }
         }
         return textResult(result.status !== "ok" ? `发送结果: ${result.status}。原因: ${result.message ?? "未知"}` : "发送结果: ok");
       },
     },
     {
       name: "qq_send_group_message",
-      description: "发送 QQ 群聊消息。message 内可写 @QQ号 或 @all 来 @群成员，也可写 [表情:名称]。",
+      description: "发送 QQ 群聊消息。message 内可写 @QQ号 或 @all 来 @群成员，也可写 [表情:名称]。若该群已有会话，该条会写入该群会话历史，该群后续消息时 AI 可见。",
       parameters: {
         type: "object", required: ["group_id", "message"],
         properties: {
@@ -50,9 +62,20 @@ export function createMessagingTools(ctx: PluginContext): AnyAgentTool[] {
         const withAt = convertPlainAtToCq(message);
         const content = expandInlineFaces(withAt);
         const result = await ctx.api.sendGroupMsg(groupId, content);
-        if (result.status === "ok" && ctx.msgManager) {
-          const msgId = (result.data as Record<string, unknown>)?.message_id;
-          if (msgId) ctx.msgManager.add(String(msgId), `g:${groupId}`, message, "group", groupId);
+        if (result.status === "ok") {
+          if (ctx.msgManager) {
+            const msgId = (result.data as Record<string, unknown>)?.message_id;
+            if (msgId) ctx.msgManager.add(String(msgId), `g:${groupId}`, message, "group", groupId);
+          }
+          if (ctx.resolveSessionKeyForPeer && ctx.sessionStore) {
+            try {
+              const sessionKey = ctx.resolveSessionKeyForPeer(groupId, true);
+              const sessionFile = ctx.sessionStore.getSessionFilePath(sessionKey);
+              if (sessionFile) appendAssistantMessageToSessionFile(sessionFile, message);
+            } catch (e) {
+              ctx.log.warn?.(`[QQ] Record outbound to session failed: ${e}`);
+            }
+          }
         }
         return textResult(result.status !== "ok" ? `群消息发送结果: ${result.status}。原因: ${result.message ?? "未知"}` : "群消息发送结果: ok");
       },

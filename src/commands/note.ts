@@ -1,6 +1,7 @@
 import type { Command, CommandContext } from "./types.js";
 import type { QQMessage } from "../napcat/types.js";
 import { zh as t } from "../locale/zh.js";
+import { getLocalDateString } from "../util/date.js";
 import { getSenderDisplayName } from "../util/identity.js";
 
 export const noteCommand: Command = {
@@ -12,7 +13,7 @@ export const noteCommand: Command = {
 
     try {
       const section = ctx.memoryManager.guessNoteSection(noteContent);
-      const now = new Date().toISOString().slice(0, 10);
+      const now = getLocalDateString();
       const entry = `- [${now}] ${noteContent}`;
       const nickname = getSenderDisplayName(msg);
       ctx.memoryManager.writeUserNote(msg.userId, nickname, section, entry);

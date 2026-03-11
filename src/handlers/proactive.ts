@@ -2,6 +2,7 @@ import type { NapCatAPI } from "../napcat/api.js";
 import type { BotConfig } from "../config.js";
 import type { PluginLogger, PluginRuntime, OpenClawConfig } from "../types-compat.js";
 import type { MemoryManager } from "../services/memory-manager.js";
+import { getLocalDateString } from "../util/date.js";
 import { zh as t } from "../locale/zh.js";
 
 export interface ProactiveContext {
@@ -96,13 +97,15 @@ export class ProactiveManager {
     const nickname = this.ctx.memoryManager.getUserNickname(target.userId);
     const userCtx = this.ctx.memoryManager.readUserMemory(target.userId);
 
-    const weekdayCn = "一二三四五六日"[new Date().getDay() === 0 ? 6 : new Date().getDay() - 1];
-    const timeStr = new Date().toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
-    const dateStr = new Date().toISOString().slice(0, 10);
+    const nowDate = new Date();
+    const weekdayCn = "一二三四五六日"[nowDate.getDay() === 0 ? 6 : nowDate.getDay() - 1];
+    const timeStr = nowDate.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
+    const dateStr = getLocalDateString(nowDate);
+    const timeZone = Intl.DateTimeFormat().resolvedOptions().timeZone ?? "Asia/Shanghai";
     const quietNote = inQuietHours ? "是（除非有约定/待办提醒，否则倾向不发）" : "否";
 
     const prompt = t.proactivePromptTemplate({
-      timeStr, dateStr, weekdayCn, quietNote,
+      timeStr, dateStr, weekdayCn, quietNote, timeZone,
       nickname, userCtx, minutesSince: target.minutesSince,
     });
 

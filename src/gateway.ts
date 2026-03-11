@@ -11,8 +11,12 @@ import { MemoryManager } from "./services/memory-manager.js";
 import { FileDownloader } from "./services/file-downloader.js";
 import { ImageResolver } from "./services/image-resolver.js";
 import { QzoneEventListener } from "./services/qzone-event-listener.js";
+import { CrossContextCache } from "./services/cross-context-cache.js";
+import { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 import { expandInlineFaces } from "./util/cq-code.js";
-import { getSenderDisplayName } from "./util/identity.js";
+import { getCurrentTimeBlock } from "./util/date.js";
+import { getSenderDisplayName, buildGroupHeader } from "./util/identity.js";
+import { getSyntheticMessageId } from "./util/synthetic-id.js";
 import type { PluginContext } from "./context.js";
 import type { CommandContext } from "./commands/types.js";
 import type { QQMessage } from "./napcat/types.js";
@@ -65,6 +69,9 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   const sender = new MessageSender(api, msgManager, config, log);
   const imageResolver = new ImageResolver(api, config);
 
+  const crossContextCache = new CrossContextCache();
+  const confidentialNotes = new ConfidentialNoteStore(config, log);
+
   ctx.api = api;
   ctx.msgManager = msgManager;
   ctx.sessionStore = sessionStore;
@@ -72,6 +79,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   ctx.fileDownloader = fileDownloader;
   ctx.messageSender = sender;
   ctx.imageResolver = imageResolver;
+  ctx.crossContextCache = crossContextCache;
+  ctx.confidentialNotes = confidentialNotes;
 
   if (config.qzone.enabled) {
     ctx.qzoneApi = new QzoneAPI(
@@ -81,6 +90,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     );
     log.info(`[QQ] QZone bridge enabled → ${config.qzone.bridgeUrl}`);
   }
+
+  setInterval(() => crossContextCache.cleanup(), 60_000);
 
   for (const [sk, override] of sessionStore.loadModelOverrides()) {
     ctx.modelOverrides.set(sk, override);
@@ -103,6 +114,23 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     }
   };
 
+  const resolveSessionKeyForPeer = (peerId: string, isGroup: boolean): string => {
+    try {
+      const route = runtime.channel.routing.resolveAgentRoute({
+        cfg: ocConfig,
+        channel: "qq",
+        accountId,
+        peer: { id: peerId },
+        guildId: isGroup ? peerId : undefined,
+      });
+      return route.sessionKey;
+    } catch {
+      return `agent:main:qq:${isGroup ? "group" : "direct"}:${peerId}`;
+    }
+  };
+
+  ctx.resolveSessionKeyForPeer = resolveSessionKeyForPeer;
+
   const dispatchToAgent = async (msg: QQMessage, body: string, identityBlock: string): Promise<string | null> => {
     try {
       const peer = { id: msg.userId };
@@ -116,9 +144,36 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const senderName = getSenderDisplayName(msg);
       const mediaPaths = await imageResolver.resolveImagePaths(msg);
 
+      const isGroup = msg.messageType === "group" && !!msg.groupId;
+
+      // --- Build BodyForAgent with context supplements ---
+      const currentTimeLine = `[当前时间] ${getCurrentTimeBlock()}`;
+      let bodyForAgent: string;
+      if (isGroup) {
+        // Group: stable header + per-turn speaker identity + body
+        // Body (persisted in history) stays lean; BodyForAgent (current turn) is enriched
+        const groupHeader = buildGroupHeader(msg.groupId!);
+        const confNote = confidentialNotes.getNotesForUser(msg.userId);
+        const confBlock = confNote
+          ? `\n[保密参考（切勿在群内复述或透露来源）] ${confNote}`
+          : "";
+        bodyForAgent = `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}${confBlock}\n\n${body}`;
+      } else {
+        // Private: full identity + recent group activity supplement + confidential notes
+        const supplement = crossContextCache.buildPrivateChatSupplement(msg.userId);
+        const confNote = confidentialNotes.getNotesForUser(msg.userId);
+        const confBlock = confNote
+          ? `\n[保密参考（切勿向对方复述或透露来源）] ${confNote}`
+          : "";
+        const extra = [supplement, confBlock].filter(Boolean).join("\n");
+        bodyForAgent = extra
+          ? `${currentTimeLine}\n\n${identityBlock}\n${extra}\n\n${body}`
+          : `${currentTimeLine}\n\n${identityBlock}\n\n${body}`;
+      }
+
       const msgCtx: Record<string, unknown> = {
         Body: body,
-        BodyForAgent: `${identityBlock}\n\n${body}`,
+        BodyForAgent: bodyForAgent,
         RawBody: msg.content,
         CommandBody: msg.content,
         BodyForCommands: msg.content,
@@ -242,6 +297,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     fileDownloader,
     commandRegistry: ctx.commandRegistry!,
     cmdCtx,
+    crossContextCache,
     resolveSessionKey,
     dispatchToAgent,
   });
@@ -266,7 +322,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       inbound.handleMessageEvent({
         post_type: "message",
         message_type: "private",
-        message_id: 0,
+        message_id: getSyntheticMessageId(),
         user_id: Number(userId),
         message: [{ type: "text", data: { text: content } }],
         raw_message: content,

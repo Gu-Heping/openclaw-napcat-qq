@@ -2,6 +2,7 @@ import type { Command, CommandContext } from "./types.js";
 import type { QQMessage } from "../napcat/types.js";
 import { zh as t } from "../locale/zh.js";
 import { MODEL_DISPLAY_NAMES } from "../config.js";
+import { getLocalDateString } from "../util/date.js";
 import { buildIdentityBlock, getSenderDisplayName } from "../util/identity.js";
 
 export const clearCommand: Command = {
@@ -32,7 +33,7 @@ export const summaryClearCommand: Command = {
 
       if (summary && msg.userId) {
         try {
-          const now = new Date().toISOString().slice(0, 10);
+          const now = getLocalDateString();
           const entry = `- [${now}] 对话总结: ${summary.replace(/\n/g, " ").slice(0, 200)}`;
           const nickname = getSenderDisplayName(msg);
           ctx.memoryManager.writeUserNote(msg.userId, nickname, t.sectionNotes, entry);

@@ -77,11 +77,12 @@ export const zh = {
     dateStr: string;
     weekdayCn: string;
     quietNote: string;
+    timeZone: string;
     nickname: string;
     userCtx: string;
     minutesSince: number;
   }) =>
-    `当前时间：${params.timeStr}（${params.dateStr} 星期${params.weekdayCn}）。是否在免打扰时段（22:00–07:00）：${params.quietNote}
+    `当前时间：${params.timeStr}（${params.dateStr} 星期${params.weekdayCn}），以上为 ${params.timeZone}。是否在免打扰时段（22:00–07:00）：${params.quietNote}
 
 关于这位用户：
 ${params.nickname ? `【称呼】可称 TA「${params.nickname}」。\n\n` : ""}${params.userCtx.slice(0, 800) || "暂无详细记忆"}

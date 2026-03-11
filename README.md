@@ -151,6 +151,16 @@ sudo systemctl restart openclaw-gateway
 
 工具参数与说明见 **src/tools/** 下各文件的 `name`、`description` 与 `parameters`。
 
+## 已知限制
+
+- **工具代发到他人时的会话历史**：通过 `qq_send_message`、`qq_send_group_message` 向某用户或某群发送的消息，在发送成功后会**写入对方/该群会话的 jsonl 历史**（若该会话已存在，即对方或该群曾与 Bot 有过对话）。因此当对方之后与 Bot 对话时，AI 能读到「自己曾给该用户/群发过某条消息」。若对方从未与 Bot 聊过，会话尚未创建，则不会写入，待其首次发消息后新会话中的历史不包含本次代发。
+
+## 近期更新
+
+- **时间与日期**：AI 收到的「当前时间」统一为本地日期与时间（不再用 UTC 日期），主动对话与普通消息均带时区；记忆与笔记中的「今天」也改为本地日期，避免今天/昨天/明天混淆。
+- **特殊消息历史**：主动对话、戳一戳、离线文件等合成事件使用唯一 `message_id`，避免在去重窗口内被误判为重复而丢失，保证这些轮次都会进入会话历史。
+- **工具代发写入对方会话**：`qq_send_message`、`qq_send_group_message` 发送成功后，若目标用户/群已有会话，会将本次发送内容追加到该会话的 jsonl 历史中，对方后续对话时 AI 可见「曾发过该条」。
+
 ## 依赖
 
 - [NapCat](https://github.com/NapNeko/NapCat)（OneBot v11，Docker 或本地部署，需提供 HTTP + WS）。

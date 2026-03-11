@@ -100,4 +100,22 @@ export class SessionStore {
       return false;
     }
   }
+
+  /**
+   * Returns the session jsonl file path for the given sessionKey, if the session exists
+   * in sessions.json (created by the core when that session has been used).
+   * Used to append "assistant" lines when recording tool-sent messages to that session.
+   */
+  getSessionFilePath(sessionKey: string): string | null {
+    try {
+      if (!fs.existsSync(this.sessionsPath)) return null;
+      const store = JSON.parse(fs.readFileSync(this.sessionsPath, "utf-8"));
+      const entry = store[sessionKey];
+      if (!entry || typeof entry !== "object") return null;
+      const pathVal = entry.sessionFile;
+      return typeof pathVal === "string" && pathVal ? pathVal : null;
+    } catch {
+      return null;
+    }
+  }
 }

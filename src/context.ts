@@ -9,6 +9,8 @@ import type { FileDownloader } from "./services/file-downloader.js";
 import type { MessageSender } from "./services/message-sender.js";
 import type { ImageResolver } from "./services/image-resolver.js";
 import type { CommandRegistry } from "./commands/registry.js";
+import type { CrossContextCache } from "./services/cross-context-cache.js";
+import type { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 
 export interface PluginContext {
   readonly config: BotConfig;
@@ -19,11 +21,15 @@ export interface PluginContext {
   qzoneApi: QzoneAPI | null;
   msgManager: MessageManager | null;
   sessionStore: SessionStore | null;
+  /** Resolve sessionKey for a peer (userId for private, groupId for group). Set by gateway. */
+  resolveSessionKeyForPeer?: (peerId: string, isGroup: boolean) => string;
   memoryManager: MemoryManager | null;
   fileDownloader: FileDownloader | null;
   messageSender: MessageSender | null;
   imageResolver: ImageResolver | null;
   commandRegistry: CommandRegistry | null;
+  crossContextCache: CrossContextCache | null;
+  confidentialNotes: ConfidentialNoteStore | null;
 }
 
 export function createPluginContext(config: BotConfig, log: PluginLogger): PluginContext {
@@ -40,5 +46,7 @@ export function createPluginContext(config: BotConfig, log: PluginLogger): Plugi
     messageSender: null,
     imageResolver: null,
     commandRegistry: null,
+    crossContextCache: null,
+    confidentialNotes: null,
   };
 }

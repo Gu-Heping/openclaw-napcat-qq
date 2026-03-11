@@ -7,6 +7,7 @@ import type { MemoryManager } from "../services/memory-manager.js";
 import type { FileDownloader } from "../services/file-downloader.js";
 import type { CommandRegistry } from "../commands/registry.js";
 import type { CommandContext } from "../commands/types.js";
+import type { CrossContextCache } from "../services/cross-context-cache.js";
 import { parseMessageEvent } from "../napcat/parse.js";
 import { buildIdentityBlock, getContextSummary, getSenderDisplayName } from "../util/identity.js";
 import { getFaceName } from "../napcat/face-map.js";
@@ -21,6 +22,7 @@ export interface InboundDeps {
   fileDownloader: FileDownloader;
   commandRegistry: CommandRegistry;
   cmdCtx: CommandContext;
+  crossContextCache?: CrossContextCache;
   resolveSessionKey: (msg: QQMessage) => string;
   dispatchToAgent: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
 }
@@ -52,18 +54,25 @@ export class InboundHandler {
       msg.messageType === "group" ? msg.groupId : undefined,
     );
 
-    if (msg.messageType === "group") {
-      if (msg.atBot) {
-        msg.content = this.cleanAtMessage(msg.content, config.connection.selfId);
-      } else if (!this.shouldRespondInGroup(msg)) {
-        return;
-      }
+    if (msg.messageType === "group" && msg.groupId && this.deps.crossContextCache) {
+      this.deps.crossContextCache.push(
+        msg.userId, msg.groupId, getSenderDisplayName(msg), msg.content,
+      );
     }
 
+    if (msg.messageType === "group" && msg.atBot) {
+      msg.content = this.cleanAtMessage(msg.content, config.connection.selfId);
+    }
+
+    // 先处理指令：/ping、/help 等无论群内是否 @ 都回复，便于检查连接
     const cmdReply = commandRegistry.execute(msg, cmdCtx);
     if (cmdReply != null) {
       const reply = await cmdReply;
       await sender.sendReply(msg, reply);
+      return;
+    }
+
+    if (msg.messageType === "group" && !this.shouldRespondInGroup(msg)) {
       return;
     }
 

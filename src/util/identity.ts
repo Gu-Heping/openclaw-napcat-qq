@@ -1,34 +1,59 @@
 import type { QQMessage } from "../napcat/types.js";
 
 /**
- * Build a lightweight identity block (~80-120 tokens) for the AI,
- * telling it who the current user is and where memory files are.
+ * Build a lightweight identity block for the AI.
+ * For **private chat**: full identity (who is speaking + memory paths + hints).
+ * For **group chat**: only the "current speaker" line — the stable group header
+ * is provided separately via `buildGroupHeader()` so that it appears once per
+ * session rather than repeated in every history turn.
  */
 export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): string {
   const userId = msg.userId;
   const nickname = getSenderDisplayName(msg);
   const avatarUrl = `https://q1.qlogo.cn/g?b=qq&nk=${userId}&s=640`;
 
-  const lines: string[] = [`[身份] ${nickname}(${userId}) 头像: ${avatarUrl}`];
-  const paths = [`memory/users/${userId}.md`];
-
   if (msg.messageType === "group" && msg.groupId) {
-    const groupAvatar = `https://p.qlogo.cn/gh${msg.groupId}/${msg.groupId}/0`;
-    lines.push(`[群聊] ${msg.groupId} 群头像: ${groupAvatar}`);
-    paths.push(`memory/groups/${msg.groupId}.md`);
+    return buildGroupTurnIdentity(msg);
   }
 
+  const lines: string[] = [`[身份] ${nickname}(${userId}) 头像: ${avatarUrl}`];
+  const paths = [`memory/users/${userId}.md`];
   paths.push("memory/social/relationships.md");
   lines.push(`[记忆] ${paths.join(" | ")}`);
   lines.push("[提示] 用 memory_search 语义检索记忆，用 write 更新记忆文件");
   lines.push("[回复] 只输出要发给对方的那一句话或几句话，不要输出内心独白、推理过程、「用户说…」「我应该…」「让我…」等元描述；不要向用户提及「系统」「系统问你」「主动对话」等内部流程。");
 
   if (msg.content?.startsWith("[QQ空间")) {
-    const myQQ = opts?.selfId || userId;
     lines.push(`[QQ空间事件] 这是QQ空间推送。回复评论用 qzone_comment(tid=..., content=..., reply_comment_id=..., reply_uin=...)（消息里会给出 reply_comment_id/reply_uin，content 只写正文、@ 由服务端自动加），qzone_like 点赞，qzone_get_comments 查看评论。互动日志: memory/qzone/feeds/`);
   }
 
   return lines.join("\n");
+}
+
+/**
+ * Stable group header — included once in the current-turn context for group chats.
+ * Tells the model it is the same bot across the whole group conversation.
+ */
+export function buildGroupHeader(groupId: string): string {
+  const groupAvatar = `https://p.qlogo.cn/gh${groupId}/${groupId}/0`;
+  return [
+    `[群聊模式] 你是 QQ 群 ${groupId} 里的同一个机器人。以下为群内多人对话，请以群成员身份连贯参与，保持统一人格。`,
+    `[群头像] ${groupAvatar}`,
+    `[群记忆] memory/groups/${groupId}.md | memory/social/relationships.md`,
+    `[提示] 用 memory_search 语义检索记忆，用 write 更新记忆文件。群内成员的个人记忆在 memory/users/ 下，可按 QQ 号或昵称检索。`,
+    `[回复] 只输出要发给群里的消息，不要输出内心独白、推理过程等元描述。`,
+  ].join("\n");
+}
+
+/**
+ * Per-turn identity for group chat — lightweight, only identifies who is
+ * currently speaking and their personal memory path.  This is what gets
+ * included in BodyForAgent (current turn only), NOT persisted into history.
+ */
+export function buildGroupTurnIdentity(msg: QQMessage): string {
+  const nickname = getSenderDisplayName(msg);
+  const userId = msg.userId;
+  return `[当前发言者] ${nickname}(${userId}) 个人记忆: memory/users/${userId}.md`;
 }
 
 export function getSenderDisplayName(msg: QQMessage): string {

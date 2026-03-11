@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { BotConfig } from "../config.js";
 import type { PluginLogger } from "../types-compat.js";
+import { getLocalDateString } from "../util/date.js";
 import { zh as t } from "../locale/zh.js";
 
 export class MemoryManager {
@@ -130,7 +131,7 @@ export class MemoryManager {
     }
     try {
       let content = fs.readFileSync(filePath, "utf-8");
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getLocalDateString();
       const memberLine = `- ${nickname}(${userId}) 最近活跃: ${today}`;
       const memberRe = new RegExp(`^- .+\\(${userId}\\) 最近活跃:.+$`, "m");
 
@@ -147,6 +148,20 @@ export class MemoryManager {
           } else {
             content = content.slice(0, insertAt) + memberLine + "\n" + content.slice(insertAt);
           }
+        }
+      }
+
+      // Cap active members list to 50 to prevent unbounded file growth in large groups
+      const memberHeader = "## 活跃成员";
+      const mhIdx = content.indexOf(memberHeader);
+      if (mhIdx !== -1) {
+        const mhEnd = content.indexOf("\n", mhIdx) + 1;
+        const nextSec = content.indexOf("\n## ", mhEnd);
+        const secEnd = nextSec === -1 ? content.length : nextSec;
+        const memberLines = content.slice(mhEnd, secEnd).split("\n").filter((l) => l.startsWith("- "));
+        if (memberLines.length > 50) {
+          const kept = memberLines.slice(0, 50);
+          content = content.slice(0, mhEnd) + kept.join("\n") + "\n" + content.slice(secEnd);
         }
       }
 
@@ -213,7 +228,7 @@ export class MemoryManager {
       const feedDir = path.join(this.workspace, "memory", "qzone", "feeds");
       fs.mkdirSync(feedDir, { recursive: true });
 
-      const today = new Date().toISOString().slice(0, 10);
+      const today = getLocalDateString();
       const feedFile = path.join(feedDir, `${today}.md`);
       const time = new Date().toLocaleString("zh-CN", { hour: "2-digit", minute: "2-digit" });
 
@@ -250,7 +265,7 @@ export class MemoryManager {
   private updateRelationship(uidA: string, uidB: string, nameA: string, nameB: string, context: string): void {
     const relPath = path.join(this.workspace, "memory", "social", "relationships.md");
     if (!fs.existsSync(relPath)) return;
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getLocalDateString();
     const [sortedA, sortedB] = uidA < uidB ? [uidA, uidB] : [uidB, uidA];
     const [dispA, dispB] = uidA < uidB
       ? [`${nameA}(${uidA})`, `${nameB}(${uidB})`]
