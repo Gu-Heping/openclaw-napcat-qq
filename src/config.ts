@@ -61,6 +61,15 @@ export interface QzoneConfig {
   notifyEvents: ("comment" | "like" | "post")[];
 }
 
+/** 与 Telegram/WeCom 对齐的渠道策略，来自 openclaw.json 的 channels.qq */
+export interface ChannelPolicyConfig {
+  enabled?: boolean;
+  dmPolicy?: "open" | "allowlist" | "pairing" | "disabled";
+  allowFrom?: (string | number)[];
+  groupPolicy?: "open" | "allowlist" | "disabled";
+  groupAllowFrom?: (string | number)[];
+}
+
 export interface BotConfig {
   connection: NapCatPluginConfig;
   behavior: BehaviorConfig;
@@ -70,6 +79,8 @@ export interface BotConfig {
   network: NetworkConfig;
   paths: PathsConfig;
   qzone: QzoneConfig;
+  /** 来自 channels.qq 的策略，与 Telegram/WeCom 一致 */
+  channelPolicy?: ChannelPolicyConfig;
 }
 
 const DEFAULT_BEHAVIOR: BehaviorConfig = {
@@ -171,8 +182,28 @@ function resolvePaths(overrides?: Record<string, unknown>): PathsConfig {
   return defaults;
 }
 
-export function resolveConfig(raw?: Record<string, unknown>): BotConfig {
+function resolveChannelPolicy(channelsQq?: Record<string, unknown> | null): ChannelPolicyConfig | undefined {
+  if (!channelsQq || typeof channelsQq !== "object") return undefined;
+  const p: ChannelPolicyConfig = {};
+  if (typeof channelsQq.enabled === "boolean") p.enabled = channelsQq.enabled;
+  if (channelsQq.dmPolicy === "open" || channelsQq.dmPolicy === "allowlist" || channelsQq.dmPolicy === "pairing" || channelsQq.dmPolicy === "disabled") {
+    p.dmPolicy = channelsQq.dmPolicy;
+  }
+  if (Array.isArray(channelsQq.allowFrom)) p.allowFrom = channelsQq.allowFrom;
+  if (channelsQq.groupPolicy === "open" || channelsQq.groupPolicy === "allowlist" || channelsQq.groupPolicy === "disabled") {
+    p.groupPolicy = channelsQq.groupPolicy;
+  }
+  if (Array.isArray(channelsQq.groupAllowFrom)) p.groupAllowFrom = channelsQq.groupAllowFrom;
+  if (Object.keys(p).length === 0) return undefined;
+  return p;
+}
+
+export function resolveConfig(
+  raw?: Record<string, unknown>,
+  channelsQq?: Record<string, unknown> | null,
+): BotConfig {
   const c = raw ?? {};
+  const channelPolicy = resolveChannelPolicy(channelsQq);
 
   const connection: NapCatPluginConfig = {
     httpUrl: String(c.httpUrl ?? "http://127.0.0.1:3000"),
@@ -203,5 +234,6 @@ export function resolveConfig(raw?: Record<string, unknown>): BotConfig {
     network: mergeSection(DEFAULT_NETWORK, (c.network ?? {}) as Record<string, unknown>),
     paths: resolvePaths((c.paths ?? undefined) as Record<string, unknown> | undefined),
     qzone,
+    channelPolicy,
   };
 }

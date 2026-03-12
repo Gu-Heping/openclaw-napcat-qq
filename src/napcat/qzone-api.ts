@@ -63,6 +63,16 @@ export class QzoneAPI {
     return this.request("get_status");
   }
 
+  /** 校验当前 Cookie 是否有效 */
+  checkCookie() {
+    return this.request("check_cookie");
+  }
+
+  /** 更新 QZone Cookie（桥接会写回缓存与 .env） */
+  updateCookie(cookieString: string) {
+    return this.request("update_cookie", { cookie: cookieString });
+  }
+
   // ── 说说 CRUD ──
   getEmotionList(userId?: string, pos = 0, num = 20, maxPages?: number) {
     const d: Record<string, unknown> = { pos, num };
@@ -126,6 +136,20 @@ export class QzoneAPI {
     return this.request("get_like_list", { user_id: userId, tid });
   }
 
+  /** 取消点赞（桥接可自动补全 user_id 等） */
+  unlike(tid: string, userId?: string) {
+    const d: Record<string, unknown> = { tid };
+    if (userId) d.user_id = userId;
+    return this.request("unlike", d);
+  }
+
+  /** 转发说说：user_id=原作者，tid=说说ID，content=转发附言 */
+  forwardMsg(userId: string, tid: string, content?: string) {
+    const d: Record<string, unknown> = { user_id: userId, tid };
+    if (content) d.content = content;
+    return this.request("forward_msg", d);
+  }
+
   // ── 好友动态 / 访客 ──
   getFriendFeeds(cursor?: string, num?: number) {
     const d: Record<string, unknown> = {};
@@ -138,6 +162,21 @@ export class QzoneAPI {
     const d: Record<string, unknown> = {};
     if (userId) d.user_id = userId;
     return this.request("get_visitor_list", d);
+  }
+
+  /** 说说浏览/流量数据（需 tid） */
+  getTrafficData(userId: string, tid: string) {
+    return this.request("get_traffic_data", { user_id: userId, tid });
+  }
+
+  /** 设置说说可见范围：privacy 为 'private' | 'public' */
+  setEmotionPrivacy(tid: string, privacy: "private" | "public") {
+    return this.request("set_emotion_privacy", { tid, privacy });
+  }
+
+  /** 获取用户头像/资料（昵称等） */
+  getPortrait(userId: string) {
+    return this.request("get_portrait", { user_id: userId });
   }
 
   // ── 图片上传 ──
@@ -164,5 +203,34 @@ export class QzoneAPI {
     if (userId) d.user_id = userId;
     if (albumId) d.album_id = albumId;
     return this.request("get_photo_list", d);
+  }
+
+  createAlbum(name: string, desc?: string, priv?: number) {
+    const d: Record<string, unknown> = { name };
+    if (desc) d.desc = desc;
+    if (priv !== undefined) d.priv = priv;
+    return this.request("create_album", d);
+  }
+
+  deleteAlbum(albumId: string) {
+    return this.request("delete_album", { album_id: albumId });
+  }
+
+  deletePhoto(albumId: string, photoId: string, userId?: string) {
+    const d: Record<string, unknown> = { album_id: albumId, photo_id: photoId };
+    if (userId) d.user_id = userId;
+    return this.request("delete_photo", d);
+  }
+
+  getVersionInfo() {
+    return this.request("get_version_info");
+  }
+
+  resetApiCaches() {
+    return this.request("reset_api_caches");
+  }
+
+  probeApiRoutes(userId: string, tid: string) {
+    return this.request("probe_api_routes", { uin: userId, tid });
   }
 }

@@ -23,6 +23,23 @@ import type { QQMessage } from "./napcat/types.js";
 import type { PluginLogger, PluginRuntime, OpenClawConfig } from "./types-compat.js";
 import { zh as t } from "./locale/zh.js";
 
+/** 若内容像内部错误（JSON 解析、API 校验等），返回友好提示，避免把堆栈/错误原文发给用户 */
+function sanitizeReplyText(text: string): string {
+  if (!text || typeof text !== "string") return text;
+  const s = text.trim();
+  if (
+    /^Unexpected\s+non-whitespace\s+character\s+after\s+JSON/i.test(s) ||
+    /position\s+\d+.*column\s+\d+/i.test(s) ||
+    /SyntaxError|JSON\.parse/i.test(s) ||
+    /validation\s+errors?.*Field\s+required/i.test(s) ||
+    /request\s+could\s+not\s+be\s+processed/i.test(s) ||
+    /^\s*\{\s*"error"/i.test(s)
+  ) {
+    return t.errorReplyParse;
+  }
+  return text;
+}
+
 const REASONING_RE = /发一条|合适时机|不会太晚|结合\s*[^。]*兴趣|简短自然|若适合|只写\s*一条|不要解释|免打扰|上次对话已经|约?\s*\d+\s*分钟\s*前|分钟前发过/;
 
 function stripProactiveReasoning(text: string): string {
@@ -217,6 +234,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
           text = stripProactiveReasoning(text);
           if (!text) return;
         }
+        text = text ? sanitizeReplyText(text) : undefined;
         const mediaUrl = (payload.mediaUrl as string) || ((payload.mediaUrls as string[] | undefined)?.[0]);
         if (text || mediaUrl) {
           const outTo = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;

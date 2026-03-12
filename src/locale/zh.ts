@@ -6,6 +6,7 @@ export const zh = {
   errorContextLength: "对话太长了，我先整理一下记忆。试试发 /clear 清空对话。",
   errorRateLimit: "请求太频繁了，请等几秒再试。",
   errorTimeout: "回复超时了，请稍后再试。",
+  errorReplyParse: "回复解析异常，请再发一句试试。",
 
   // Group message prefix
   groupMessagePrefix: "[群消息] 需回复则回复，否则回复 [无需回复]。\n\n",

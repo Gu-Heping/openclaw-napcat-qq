@@ -1,6 +1,6 @@
 import type { NapCatAPI } from "../napcat/api.js";
 import type { OneBotMessageEvent, QQMessage } from "../napcat/types.js";
-import type { BotConfig } from "../config.js";
+import type { BotConfig, ChannelPolicyConfig } from "../config.js";
 import type { PluginLogger } from "../types-compat.js";
 import type { MessageSender } from "../services/message-sender.js";
 import type { MemoryManager } from "../services/memory-manager.js";
@@ -45,6 +45,11 @@ export class InboundHandler {
 
     if (this.isDuplicate(msg.id)) return;
     if (this.isRateLimited(msg.userId)) return;
+
+    if (config.channelPolicy && !this.isAllowedByPolicy(msg, config.channelPolicy)) {
+      log.info?.(`[QQ] 策略拒绝: ${msg.messageType === "group" ? `群${msg.groupId}` : "私聊"} 来自 ${msg.userId}`);
+      return;
+    }
 
     log.info?.(`[QQ] ${msg.messageType === "group" ? `群${msg.groupId}` : "私聊"} ${getSenderDisplayName(msg)}(${msg.userId}): ${msg.content.slice(0, 60)}`);
 
@@ -103,6 +108,35 @@ export class InboundHandler {
     if (msg.messageType === "group" && msg.groupId) {
       this.groupLastReply.set(msg.groupId, Date.now());
     }
+  }
+
+  private isAllowedByPolicy(msg: QQMessage, policy: ChannelPolicyConfig): boolean {
+    const allowFrom = (policy.allowFrom ?? []).map((e) => String(e).trim());
+    const groupAllowFrom = (policy.groupAllowFrom ?? []).map((e) => String(e).trim());
+
+    if (msg.messageType === "group" && msg.groupId) {
+      const gp = policy.groupPolicy ?? "open";
+      if (gp === "disabled") return false;
+      if (gp === "open") return true;
+      if (gp === "allowlist") {
+        if (groupAllowFrom.includes("*")) return true;
+        return groupAllowFrom.includes(msg.groupId);
+      }
+      return false;
+    }
+
+    const dm = policy.dmPolicy ?? "open";
+    if (dm === "disabled") return false;
+    const senderId = msg.userId;
+    if (dm === "open") {
+      if (allowFrom.includes("*")) return true;
+      return allowFrom.length === 0 || allowFrom.includes(senderId);
+    }
+    if (dm === "allowlist" || dm === "pairing") {
+      if (allowFrom.includes("*")) return true;
+      return allowFrom.includes(senderId);
+    }
+    return true;
   }
 
   private isDuplicate(id: string): boolean {

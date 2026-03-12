@@ -288,20 +288,85 @@ async function forwardToOpenClaw(message, api) {
         }
       );
       
-      console.log("[NapCat QQ] Agent result:", result);
+      console.log("[NapCat QQ] Agent result (first 200 chars):", result.slice(0, 200));
       
-      // 解析结果并发送回复
-      try {
-        const response = JSON.parse(result);
-        if (response?.message?.content) {
-          const replyText = response.message.content;
-          await client.sendPrivateMsg(userId, replyText);
-          console.log("[NapCat QQ] Agent reply sent");
+      // 解析结果并发送回复（兼容 stdout 含多行/多段 JSON 或首行日志的情况）
+      let response = null;
+      const trimmed = result.trim();
+      const tryParse = (str) => {
+        try {
+          return JSON.parse(str);
+        } catch {
+          return null;
         }
-      } catch (e) {
-        console.error("[NapCat QQ] Failed to parse agent result:", e);
-        // 发送原始结果
-        await client.sendPrivateMsg(userId, `Agent 回复:\n${result.slice(0, 500)}`);
+      };
+      // 从字符串中提取第一个完整 JSON 对象（尊重字符串边界，避免 "}" 在字符串内干扰）
+      function extractFirstJson(s) {
+        const start = s.indexOf("{");
+        if (start === -1) return null;
+        let depth = 0;
+        let i = start;
+        const len = s.length;
+        while (i < len) {
+          const c = s[i];
+          if (c === '"' || c === "'") {
+            const quote = c;
+            i += 1;
+            while (i < len) {
+              if (s[i] === "\\") {
+                i += 2;
+                continue;
+              }
+              if (s[i] === quote) {
+                i += 1;
+                break;
+              }
+              i += 1;
+            }
+            continue;
+          }
+          if (c === "{") depth++;
+          else if (c === "}") {
+            depth--;
+            if (depth === 0) return tryParse(s.slice(start, i + 1));
+          }
+          i += 1;
+        }
+        return null;
+      }
+      response = tryParse(trimmed) ?? extractFirstJson(trimmed);
+      if (!response && trimmed.includes("{")) {
+        const firstBrace = trimmed.indexOf("{");
+        let candidate = trimmed.slice(firstBrace);
+        response = tryParse(candidate) ?? extractFirstJson(candidate);
+        if (!response) {
+          for (const line of candidate.split("\n")) {
+            const s = line.trim();
+            if (s.startsWith("{")) {
+              response = tryParse(s) ?? extractFirstJson(s);
+              if (response) break;
+            }
+          }
+        }
+      }
+      if (response?.message?.content) {
+        const replyText = response.message.content;
+        await client.sendPrivateMsg(userId, replyText);
+        console.log("[NapCat QQ] Agent reply sent");
+      } else if (response) {
+        console.warn("[NapCat QQ] Agent result has no message.content, skipping send");
+      } else {
+        // 解析失败时不再把可能包含内部错误信息的原始输出发给用户
+        const isLikelyError =
+          /^(Unexpected|SyntaxError|Error:|error:)/i.test(trimmed) ||
+          /position\s+\d+.*column\s+\d+/i.test(trimmed) ||
+          /validation\s+errors?|Field\s+required|request\s+could\s+not\s+be\s+processed/i.test(trimmed) ||
+          /^\s*\{\s*"error"/i.test(trimmed) ||
+          trimmed.length < 100;
+        await client.sendPrivateMsg(
+          userId,
+          isLikelyError ? "抱歉，本次回复解析异常，请再发一句试试。" : `Agent 回复:\n${result.slice(0, 500)}`
+        );
       }
     } catch (e) {
       console.error("[NapCat QQ] Failed to call agent:", e);

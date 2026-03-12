@@ -124,6 +124,37 @@ sudo systemctl restart openclaw-gateway
 
 完整 schema 见 **openclaw.plugin.json** 的 `configSchema`。
 
+### channels.qq 配置（与 Telegram/WeCom 对齐）
+
+与 Telegram、WeCom 等渠道一致，可在 `openclaw.json` 的 **channels.qq** 中配置策略，由核心与插件共同使用（路由、允许列表等）。
+
+在 `openclaw.json` 的 **channels** 下增加 **qq** 段即可，例如：
+
+```json
+{
+  "channels": {
+    "qq": {
+      "enabled": true,
+      "dmPolicy": "open",
+      "allowFrom": ["*"],
+      "groupPolicy": "allowlist",
+      "groupAllowFrom": ["123456789", "987654321"]
+    }
+  }
+}
+```
+
+| 字段 | 类型 | 说明 | 默认 |
+|------|------|------|------|
+| **enabled** | boolean | 是否启用 QQ 渠道；为 `false` 时插件不启动该渠道 | 不设则视为启用 |
+| **dmPolicy** | string | 私聊策略：`open`（按 allowFrom）、`allowlist`（仅允许列表）、`pairing`（仅允许列表，同 allowlist）、`disabled`（拒绝所有私聊） | `open` |
+| **allowFrom** | string[] | 允许的私聊来源（QQ 号或 `"*"` 表示所有人）；dmPolicy 为 `open` 时 `["*"]` 表示接受所有人 | `[]` |
+| **groupPolicy** | string | 群聊策略：`open`（所有群）、`allowlist`（仅 groupAllowFrom 中的群）、`disabled`（拒绝所有群） | `open` |
+| **groupAllowFrom** | string[] | 允许的群号列表；仅当 groupPolicy 为 `allowlist` 时生效 | `[]` |
+
+- 未配置 `channels.qq` 时，行为与之前一致（渠道启用，私聊/群聊均按插件原有逻辑）。
+- 配置后，核心的 `resolveAgentRoute` 会读取 `channels.qq`，插件入站也会按上述策略过滤，与 Telegram/WeCom 的配置方式一致。
+
 ## QQ 命令（/ 开头）
 
 | 命令 / 别名 | 说明 |
@@ -150,6 +181,20 @@ sudo systemctl restart openclaw-gateway
 - **QQ 空间**（需 NapCat 接 [onebot-qzone](https://github.com/Gu-Heping/onebot-qzone) 桥接）：`qzone_get_friend_feeds`（好友最近说说，游标分页）、`qzone_get_posts`（指定用户说说）、`qzone_get_comments`（评论列表，PC/mobile 失败时使用 feeds3 兜底）、`qzone_comment`（发评论/回复评论）、`qzone_like`（点赞，仅需 tid）等。
 
 工具参数与说明见 **src/tools/** 下各文件的 `name`、`description` 与 `parameters`。
+
+## 故障排查（根因与应对）
+
+### 回复出现「Unexpected non-whitespace character after JSON at position …」
+
+- **原因**：OpenClaw 核心或模型在解析某段内容（如模型输出、工具结果）时执行了 `JSON.parse`，输入不是合法 JSON（例如带前缀/后缀、被截断），异常文案被当作回复内容下发。
+- **本插件已做**：发送前若检测到该类文案会替换为「回复解析异常，请再发一句试试。」；若使用 legacy 入口（`index.js`），会先尝试从 stdout 中按字符串边界提取第一个完整 JSON 再解析，减少因前后缀导致的解析失败。
+- **治本**：需在 OpenClaw 核心侧保证：出错时不要将原始 `JSON.parse` 异常直接作为回复内容；或对「可能含前后缀」的字符串先提取再解析。
+
+### 回复出现「53 validation errors」「Field required 'function'」等 API 校验错误
+
+- **原因**：调用模型 API 时，请求体里的 `tools` 格式与当前提供商要求不一致。例如核心按 OpenAI 风格发送（`name` / `description` / `input_schema`），而部分接口（如某些 Kimi/Anthropic 系）要求每项为 `{ type: "function", function: { name, description, input_schema } }`，缺少 `function` 字段会报错。
+- **本插件**：只负责向核心注册工具（name、description、parameters），不参与构建发往模型 API 的请求体，无法在此修正格式。
+- **治本**：升级 OpenClaw 到已适配该提供商 tools 格式的版本，或暂时换用与当前核心格式兼容的模型/提供商；也可在 [OpenClaw 仓库](https://github.com/openclaw/openclaw) 提 issue/PR 说明所用模型与期望的 tools 结构。
 
 ## 已知限制
 

@@ -29,6 +29,7 @@ export class ImageResolver {
             const d = result.data as Record<string, unknown>;
             const localPath = d.file ? String(d.file) : "";
             const base64 = d.base64 ? String(d.base64) : "";
+            const apiUrl = d.url ? String(d.url) : "";
             if (localPath && path.isAbsolute(localPath) && fs.existsSync(localPath)) {
               paths.push(localPath);
               resolved = true;
@@ -41,6 +42,21 @@ export class ImageResolver {
                 fs.writeFileSync(outPath, buf);
                 paths.push(outPath);
                 resolved = true;
+              }
+            } else if (apiUrl && (apiUrl.startsWith("http://") || apiUrl.startsWith("https://"))) {
+              const resp = await fetch(apiUrl, {
+                signal: AbortSignal.timeout(this.config.network.imageFetchTimeoutMs),
+                headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+              });
+              if (resp.ok) {
+                const buf = Buffer.from(await resp.arrayBuffer());
+                if (buf.length > 0 && buf.length <= maxSize) {
+                  fs.mkdirSync(tempDir, { recursive: true });
+                  const outPath = path.join(tempDir, `${crypto.randomUUID()}.jpg`);
+                  fs.writeFileSync(outPath, buf);
+                  paths.push(outPath);
+                  resolved = true;
+                }
               }
             }
           }

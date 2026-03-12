@@ -47,3 +47,12 @@ export function expandInlineFaces(text: string): string | Segment[] {
   }
   return segments;
 }
+
+/**
+ * 将聊天统一格式 [表情:名称] 转为 QZone 桥接可识别的 [名称]。
+ * 与 expandInlineFaces 同源：AI 只需输出 [表情:微笑]，QQ 聊天用 expandInlineFaces 转 CQ，空间用本函数转 [微笑] 再交桥接 convertNamesToEmojis。
+ */
+export function normalizeFaceFormatForQzone(text: string): string {
+  if (!text || !text.includes("[表情:")) return text;
+  return text.replace(/\[表情:([^\]]+)\]/g, "[$1]");
+}

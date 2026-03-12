@@ -1,6 +1,7 @@
 import type { AnyAgentTool, AgentToolResult } from "../types-compat.js";
 import type { PluginContext } from "../context.js";
 import type { QzoneBridgeResponse } from "../napcat/qzone-api.js";
+import { normalizeFaceFormatForQzone } from "../util/cq-code.js";
 
 function textResult(text: string): AgentToolResult {
   return { content: [{ type: "text", text }] };
@@ -14,6 +15,14 @@ function formatResponse(res: QzoneBridgeResponse, successMsg?: string): string {
   return `[QZone 错误] ${res.message ?? `retcode=${res.retcode}`}`;
 }
 
+/** 常用表情名（与 QQ 聊天 face-map + onebot-qzone EMOJI_NAME_MAP 对齐，统一用 [表情:名称] 格式） */
+const QZONE_EMOJI_NAMES = [
+  "微笑", "撇嘴", "色", "发呆", "得意", "流泪", "害羞", "闭嘴", "睡", "大哭", "尴尬", "发怒", "调皮", "呲牙", "惊讶", "难过", "酷", "冷汗", "抓狂", "吐", "偷笑", "可爱", "白眼", "傲慢", "饥饿", "困", "惊恐", "流汗", "憨笑", "大兵",
+  "奋斗", "咒骂", "疑问", "嘘", "晕", "折磨", "衰", "骷髅", "敲打", "再见", "擦汗", "抠鼻", "鼓掌", "糗大了", "坏笑", "左哼哼", "右哼哼", "哈欠", "鄙视", "委屈", "快哭了", "阴险", "亲亲", "吓", "可怜", "菜刀", "西瓜", "啤酒", "篮球", "乒乓",
+  "咖啡", "饭", "猪头", "玫瑰", "凋谢", "示爱", "爱心", "心碎", "蛋糕", "闪电", "炸弹", "刀", "足球", "瓢虫", "便便", "月亮", "太阳", "礼物", "拥抱", "强", "弱", "握手", "胜利", "抱拳", "勾引", "拳头", "差劲", "爱你", "NO", "OK",
+  "点赞", "无聊", "怀疑", "皱眉", "无语", "无奈", "傻笑", "敷衍", "狗头", "真香", "打call", "在吗", "摸鱼", "裂开", "我太难了", "泪目", "好耶", "贴贴", "红包", "感谢", "晚安", "加油", "干杯", "福到了",
+];
+
 export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
   const selfId = ctx.config.connection.selfId || "unknown";
   const log = ctx.log;
@@ -26,7 +35,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 1. qzone_publish ──
     {
       name: "qzone_publish",
-      description: `发布 QQ 空间说说（你的QQ号: ${selfId}）。content=文字内容，images=图片URL数组（可选）`,
+      description: `发布 QQ 空间说说（你的QQ号: ${selfId}）。content=文字内容，images=图片URL数组（可选）。表情与 QQ 聊天一致：在 content 中写 [表情:名称]，如 [表情:微笑][表情:狗头][表情:爱心]，与 qq_send_message 格式相同；可用 qzone_emoji_list 查看可用表情。`,
       parameters: {
         type: "object",
         required: ["content"],
@@ -42,8 +51,9 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
         const err = guard();
         if (err) return textResult(err);
-        const content = String(params.content ?? "");
+        let content = String(params.content ?? "");
         if (!content) return textResult("[错误] 缺少 content");
+        content = normalizeFaceFormatForQzone(content);
         const images = Array.isArray(params.images)
           ? (params.images as unknown[]).map((i) => String(i))
           : undefined;
@@ -53,6 +63,35 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           return textResult(`发布成功。tid=${data.tid ?? data.message_id ?? ""}`);
         }
         return textResult(formatResponse(res));
+      },
+    },
+
+    // ── 1.5 qzone_emoji_list ──
+    {
+      name: "qzone_emoji_list",
+      description: "获取可用表情列表。格式与 QQ 聊天一致：在 content 中写 [表情:名称]，如 [表情:微笑][表情:狗头]，用于 qzone_publish、qzone_comment 与 qq_send_message、qq_send_group_message 同一套写法。",
+      parameters: {
+        type: "object",
+        properties: {
+          category: {
+            type: "string",
+            enum: ["all", "common"],
+            description: "all=全部列出，common=仅常用（默认 common）",
+          },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const category = String(params.category ?? "common");
+        const names = QZONE_EMOJI_NAMES;
+        const unifiedFormat = names.map((n) => `[表情:${n}]`);
+        if (category === "all") {
+          return textResult(`可用表情（与聊天统一，在 content 中写 [表情:名称]）：\n${unifiedFormat.join(" ")}\n\n共 ${names.length} 个。`);
+        }
+        return textResult(
+          `常用表情（与 qq_send_message 等聊天格式一致，在 content 中写 [表情:名称]）：\n${unifiedFormat.join(" ")}\n\n共 ${names.length} 个。`,
+        );
       },
     },
 
@@ -151,7 +190,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论说说；也可回复某条评论（传 reply_comment_id 与 reply_uin）。必填 tid、content。回复时服务端会自动添加 @提及 格式，content 只需写回复正文。评论自己的说说可加 user_id=${selfId}。`,
+      description: `评论说说；也可回复某条评论（传 reply_comment_id 与 reply_uin）。必填 tid、content。回复时服务端会自动添加 @提及 格式，content 只需写回复正文。评论自己的说说可加 user_id=${selfId}。表情与 QQ 聊天一致：在 content 中写 [表情:名称]，如 [表情:微笑][表情:狗头]，与 qq_send_message 格式相同；可用 qzone_emoji_list 查看可用表情。`,
       parameters: {
         type: "object",
         required: ["tid", "content"],
@@ -167,8 +206,9 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const err = guard();
         if (err) return textResult(err);
         const tid = String(params.tid ?? "");
-        const content = String(params.content ?? "");
+        let content = String(params.content ?? "");
         if (!tid || !content) return textResult("[错误] 缺少 tid / content");
+        content = normalizeFaceFormatForQzone(content);
         const userId = params.user_id ? String(params.user_id) : undefined;
         log.info?.(`[QZone-Tool] qzone_comment called: tid=${tid} content=${content.slice(0, 40)}`);
         const replyId = params.reply_comment_id ? String(params.reply_comment_id) : undefined;
@@ -200,6 +240,54 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const userId = params.user_id ? String(params.user_id) : undefined;
         const res = await ctx.qzoneApi!.sendLike(tid, userId);
         return textResult(formatResponse(res, "点赞成功"));
+      },
+    },
+
+    // ── 5.5 qzone_unlike ──
+    {
+      name: "qzone_unlike",
+      description: "取消对说说的点赞。只需传 tid，服务端可自动补全参数。",
+      parameters: {
+        type: "object",
+        required: ["tid"],
+        properties: {
+          tid: { type: "string", description: "说说 ID" },
+          user_id: { type: "string", description: "说说作者 QQ 号（可选）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const tid = String(params.tid ?? "");
+        if (!tid) return textResult("[错误] 缺少 tid");
+        const userId = params.user_id ? String(params.user_id) : undefined;
+        const res = await ctx.qzoneApi!.unlike(tid, userId);
+        return textResult(formatResponse(res, "已取消点赞"));
+      },
+    },
+
+    // ── 5.6 qzone_forward ──
+    {
+      name: "qzone_forward",
+      description: "转发一条说说。user_id=原作者QQ号，tid=说说ID，content=转发时的附言（可选）。",
+      parameters: {
+        type: "object",
+        required: ["user_id", "tid"],
+        properties: {
+          user_id: { type: "string", description: "原说说的作者 QQ 号" },
+          tid: { type: "string", description: "说说 ID" },
+          content: { type: "string", description: "转发附言（可选）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const userId = String(params.user_id ?? "");
+        const tid = String(params.tid ?? "");
+        if (!userId || !tid) return textResult("[错误] 缺少 user_id 或 tid");
+        const content = params.content ? String(params.content) : undefined;
+        const res = await ctx.qzoneApi!.forwardMsg(userId, tid, content);
+        return textResult(formatResponse(res, "转发成功"));
       },
     },
 
@@ -284,6 +372,36 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const commentUin = params.comment_uin ? String(params.comment_uin) : undefined;
         const res = await ctx.qzoneApi!.deleteComment(uin, tid, commentId, commentUin);
         return textResult(formatResponse(res, "已删除评论"));
+      },
+    },
+
+    // ── 6.6 qzone_get_likes ──
+    {
+      name: "qzone_get_likes",
+      description: "获取某条说说的点赞列表。tid=说说ID，user_id=说说作者QQ号（可选，桥接可补全）。",
+      parameters: {
+        type: "object",
+        required: ["tid"],
+        properties: {
+          tid: { type: "string", description: "说说 ID" },
+          user_id: { type: "string", description: "说说作者 QQ 号（可选）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const tid = String(params.tid ?? "");
+        if (!tid) return textResult("[错误] 缺少 tid");
+        const userId = params.user_id ? String(params.user_id) : selfId;
+        const res = await ctx.qzoneApi!.getLikeList(userId, tid);
+        if (res.status !== "ok") return textResult(formatResponse(res));
+        const data = res.data as Record<string, unknown> | unknown[] | null;
+        const list = Array.isArray(data) ? data : (data && typeof data === "object" && Array.isArray((data as Record<string, unknown>).list)
+          ? (data as Record<string, unknown>).list as Record<string, unknown>[]
+          : (data as Record<string, unknown>)?.like_list ?? (data as Record<string, unknown>)?.likelist);
+        if (!Array.isArray(list) || !list.length) return textResult("暂无点赞");
+        const lines = list.slice(0, 30).map((u) => u.nickname ?? u.name ?? u.uin ?? "?");
+        return textResult(`点赞 (${list.length} 人): ${lines.join("、")}`);
       },
     },
 
@@ -374,7 +492,174 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       },
     },
 
-    // ── 9. qzone_upload_image ──
+    // ── 9. qzone_check_cookie ──
+    {
+      name: "qzone_check_cookie",
+      description: "检查 QZone 桥接当前 Cookie 是否有效，返回 p_skey/skey 状态与年龄。Cookie 失效时可用 qzone_update_cookie 更新。",
+      parameters: { type: "object", properties: {} },
+      async execute(_id: string): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const res = await ctx.qzoneApi!.checkCookie();
+        if (res.status !== "ok" && res.retcode !== 0) return textResult(formatResponse(res));
+        const data = res.data as Record<string, unknown> | null;
+        const age = data?.cookie_age_seconds;
+        const hasPskey = !!data?.has_p_skey;
+        const hasSkey = !!data?.has_skey;
+        return textResult(
+          `Cookie 状态: p_skey=${hasPskey ? "✓" : "✗"} skey=${hasSkey ? "✓" : "✗"}${age != null ? `，已使用 ${age} 秒` : ""}`,
+        );
+      },
+    },
+
+    // ── 10. qzone_update_cookie ──
+    {
+      name: "qzone_update_cookie",
+      description: "用新的 Cookie 字符串更新 QZone 桥接登录状态（桥接会写回缓存与 .env）。cookie_string 需包含 uin、p_uin、skey、p_skey 等，格式与浏览器复制的 Cookie 一致（分号分隔）。",
+      parameters: {
+        type: "object",
+        required: ["cookie_string"],
+        properties: {
+          cookie_string: { type: "string", description: "完整 Cookie 字符串（如从浏览器复制，分号分隔 key=value）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const cookieString = String(params.cookie_string ?? "").trim();
+        if (!cookieString) return textResult("[错误] 缺少 cookie_string");
+        log.info?.(`[QZone-Tool] qzone_update_cookie called (length=${cookieString.length})`);
+        const res = await ctx.qzoneApi!.updateCookie(cookieString);
+        if (res.status !== "ok" || res.retcode !== 0) return textResult(formatResponse(res));
+        const data = res.data as Record<string, unknown> | null;
+        const msg = (data?.message as string) ?? "Cookie 已更新";
+        const nickname = data?.nickname as string | undefined;
+        const userId = data?.user_id as string | number | undefined;
+        return textResult(`${msg}${userId != null ? `，QQ: ${userId}` : ""}${nickname ? `，昵称: ${nickname}` : ""}`);
+      },
+    },
+
+    // ── 10.5 qzone_get_portrait ──
+    {
+      name: "qzone_get_portrait",
+      description: "获取 QQ 用户资料（昵称、头像等）。user_id=目标 QQ 号。",
+      parameters: {
+        type: "object",
+        required: ["user_id"],
+        properties: {
+          user_id: { type: "string", description: "目标 QQ 号" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const userId = String(params.user_id ?? "");
+        if (!userId) return textResult("[错误] 缺少 user_id");
+        const res = await ctx.qzoneApi!.getPortrait(userId);
+        if (res.status !== "ok") return textResult(formatResponse(res));
+        const data = res.data as Record<string, unknown> | null;
+        const nickname = data?.nickname ?? data?.name ?? "?";
+        const avatar = data?.avatar ?? data?.figureurl ?? "";
+        return textResult(`昵称: ${nickname}${avatar ? `\n头像: ${avatar}` : ""}`);
+      },
+    },
+
+    // ── 10.6 qzone_set_privacy ──
+    {
+      name: "qzone_set_privacy",
+      description: "设置某条说说的可见范围。privacy: public=所有人可见，private=仅自己。",
+      parameters: {
+        type: "object",
+        required: ["tid", "privacy"],
+        properties: {
+          tid: { type: "string", description: "说说 ID" },
+          privacy: { type: "string", enum: ["public", "private"], description: "可见范围" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const tid = String(params.tid ?? "");
+        const privacy = String(params.privacy ?? "").toLowerCase() as "public" | "private";
+        if (!tid || !privacy) return textResult("[错误] 缺少 tid 或 privacy");
+        if (privacy !== "public" && privacy !== "private") return textResult("[错误] privacy 须为 public 或 private");
+        const res = await ctx.qzoneApi!.setEmotionPrivacy(tid, privacy);
+        return textResult(formatResponse(res, `已设为${privacy === "public" ? "所有人可见" : "仅自己可见"}`));
+      },
+    },
+
+    // ── 10.7 qzone_create_album ──
+    {
+      name: "qzone_create_album",
+      description: "创建 QQ 空间相册。name=相册名，desc=描述（可选），priv=权限（可选，默认 1）。",
+      parameters: {
+        type: "object",
+        required: ["name"],
+        properties: {
+          name: { type: "string", description: "相册名称" },
+          desc: { type: "string", description: "相册描述（可选）" },
+          priv: { type: "number", description: "权限（可选）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const name = String(params.name ?? "");
+        if (!name) return textResult("[错误] 缺少 name");
+        const desc = params.desc ? String(params.desc) : undefined;
+        const priv = params.priv != null ? Number(params.priv) : undefined;
+        const res = await ctx.qzoneApi!.createAlbum(name, desc, priv);
+        return textResult(formatResponse(res, "相册创建成功"));
+      },
+    },
+
+    // ── 10.8 qzone_delete_album ──
+    {
+      name: "qzone_delete_album",
+      description: "删除 QQ 空间相册。album_id=相册 ID（从 qzone_get_albums 获取）。",
+      parameters: {
+        type: "object",
+        required: ["album_id"],
+        properties: {
+          album_id: { type: "string", description: "相册 ID" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const albumId = String(params.album_id ?? "");
+        if (!albumId) return textResult("[错误] 缺少 album_id");
+        const res = await ctx.qzoneApi!.deleteAlbum(albumId);
+        return textResult(formatResponse(res, "相册已删除"));
+      },
+    },
+
+    // ── 10.9 qzone_delete_photo ──
+    {
+      name: "qzone_delete_photo",
+      description: "删除相册中的某张照片。album_id=相册ID，photo_id=照片ID（lloc）。user_id 可选。",
+      parameters: {
+        type: "object",
+        required: ["album_id", "photo_id"],
+        properties: {
+          album_id: { type: "string", description: "相册 ID" },
+          photo_id: { type: "string", description: "照片 ID（lloc）" },
+          user_id: { type: "string", description: "相册所属 QQ（可选）" },
+        },
+      },
+      async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
+        const err = guard();
+        if (err) return textResult(err);
+        const albumId = String(params.album_id ?? "");
+        const photoId = String(params.photo_id ?? "");
+        if (!albumId || !photoId) return textResult("[错误] 缺少 album_id 或 photo_id");
+        const userId = params.user_id ? String(params.user_id) : undefined;
+        const res = await ctx.qzoneApi!.deletePhoto(albumId, photoId, userId);
+        return textResult(formatResponse(res, "照片已删除"));
+      },
+    },
+
+    // ── 11. qzone_upload_image ──
     {
       name: "qzone_upload_image",
       description: "上传图片到 QQ 空间相册",

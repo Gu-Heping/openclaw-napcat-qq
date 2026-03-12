@@ -20,7 +20,8 @@ const plugin = {
     const log = api.logger;
     const pluginConfig = api.pluginConfig;
     const runtime = api.runtime;
-    const config = resolveConfig(pluginConfig);
+    const channelsQq = (api.config?.channels as Record<string, unknown> | undefined)?.qq;
+    const config = resolveConfig(pluginConfig, channelsQq as Record<string, unknown> | null | undefined);
     const ctx = createPluginContext(config, log);
 
     const registry = new CommandRegistry();
