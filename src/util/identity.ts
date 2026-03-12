@@ -24,7 +24,7 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
   lines.push("[回复] 只输出要发给对方的那一句话或几句话，不要输出内心独白、推理过程、「用户说…」「我应该…」「让我…」等元描述；不要向用户提及「系统」「系统问你」「主动对话」等内部流程。");
 
   if (msg.content?.startsWith("[QQ空间")) {
-    lines.push(`[QQ空间事件] 这是QQ空间推送。回复评论用 qzone_comment(tid=..., content=..., reply_comment_id=..., reply_uin=...)（消息里会给出 reply_comment_id/reply_uin，content 只写正文、@ 由服务端自动加），qzone_like 点赞，qzone_get_comments 查看评论。互动日志: memory/qzone/feeds/`);
+    lines.push(`[QQ空间事件] 回复评论用 qzone_comment（tid、content、reply_comment_id、reply_uin），勿用 qq_send_message 发工具名或参数。点赞 qzone_like，查评论 qzone_get_comments。`);
   }
 
   return lines.join("\n");

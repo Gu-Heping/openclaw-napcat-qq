@@ -11,7 +11,7 @@ export function createMessagingTools(ctx: PluginContext): AnyAgentTool[] {
   return [
     {
       name: "qq_send_message",
-      description: "发送 QQ 私聊消息。message 内可写 [表情:名称]。若对方已有会话，该条会写入对方会话历史，对方后续对话时 AI 可见。",
+      description: "发送 QQ 私聊消息。message 填要发给对方的正文（可含 [表情:名称]）。禁止把工具调用（如 qzone_comment(...)）或工具参数当 message 发出；回复空间评论请用 qzone_comment 工具。若对方已有会话，该条会写入对方会话历史。",
       parameters: {
         type: "object", required: ["user_id", "message"],
         properties: {

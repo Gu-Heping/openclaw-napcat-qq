@@ -15,13 +15,64 @@ function formatResponse(res: QzoneBridgeResponse, successMsg?: string): string {
   return `[QZone 错误] ${res.message ?? `retcode=${res.retcode}`}`;
 }
 
-/** 常用表情名（与 QQ 聊天 face-map + onebot-qzone EMOJI_NAME_MAP 对齐，统一用 [表情:名称] 格式） */
+/** 与 onebot-qzone 桥接 EMOJI_NAME_MAP 对齐（refactor 后 e190-e204 修正、doge=e249、新增 e10264 捂脸等） */
 const QZONE_EMOJI_NAMES = [
   "微笑", "撇嘴", "色", "发呆", "得意", "流泪", "害羞", "闭嘴", "睡", "大哭", "尴尬", "发怒", "调皮", "呲牙", "惊讶", "难过", "酷", "冷汗", "抓狂", "吐", "偷笑", "可爱", "白眼", "傲慢", "饥饿", "困", "惊恐", "流汗", "憨笑", "大兵",
   "奋斗", "咒骂", "疑问", "嘘", "晕", "折磨", "衰", "骷髅", "敲打", "再见", "擦汗", "抠鼻", "鼓掌", "糗大了", "坏笑", "左哼哼", "右哼哼", "哈欠", "鄙视", "委屈", "快哭了", "阴险", "亲亲", "吓", "可怜", "菜刀", "西瓜", "啤酒", "篮球", "乒乓",
   "咖啡", "饭", "猪头", "玫瑰", "凋谢", "示爱", "爱心", "心碎", "蛋糕", "闪电", "炸弹", "刀", "足球", "瓢虫", "便便", "月亮", "太阳", "礼物", "拥抱", "强", "弱", "握手", "胜利", "抱拳", "勾引", "拳头", "差劲", "爱你", "NO", "OK",
-  "点赞", "无聊", "怀疑", "皱眉", "无语", "无奈", "傻笑", "敷衍", "狗头", "真香", "打call", "在吗", "摸鱼", "裂开", "我太难了", "泪目", "好耶", "贴贴", "红包", "感谢", "晚安", "加油", "干杯", "福到了",
+  "爱情", "飞吻", "跳跳", "发抖", "怄火", "转圈", "磕头", "回头", "跳绳", "挥手", "激动", "街舞", "献吻", "左太极", "右太极",
+  "泪奔", "喷血", "doge", "托腮", "捂脸", "emm", "吃瓜", "呵呵哒", "我酸了", "太南了", "睁眼", "崇拜", "比心",
+  "变形", "摸头", "飞吻2", "亲亲2", "大笑", "开心", "喜欢", "爱你2",
 ];
+
+/** 表情名称 -> QZone 代码（与 onebot-qzone emoji.ts EMOJI_NAME_MAP 一致，桥接已基于 QzEmoji 修正 e190-e204、doge=e249 等） */
+const QZONE_EMOJI_NAME_TO_CODE: Record<string, string> = {
+  微笑: "e100", 撇嘴: "e101", 色: "e102", 发呆: "e103", 得意: "e104", 流泪: "e105", 害羞: "e106", 闭嘴: "e107", 睡: "e108", 大哭: "e109", 尴尬: "e110", 发怒: "e111", 调皮: "e112", 呲牙: "e113", 惊讶: "e114", 难过: "e115", 酷: "e116", 冷汗: "e117", 抓狂: "e118", 吐: "e119", 偷笑: "e120", 可爱: "e121", 白眼: "e122", 傲慢: "e123", 饥饿: "e124", 困: "e125", 惊恐: "e126", 流汗: "e127", 憨笑: "e128", 大兵: "e129",
+  奋斗: "e130", 咒骂: "e131", 疑问: "e132", 嘘: "e133", 晕: "e134", 折磨: "e135", 衰: "e136", 骷髅: "e137", 敲打: "e138", 再见: "e139", 擦汗: "e140", 抠鼻: "e141", 鼓掌: "e142", 糗大了: "e143", 坏笑: "e144", 左哼哼: "e145", 右哼哼: "e146", 哈欠: "e147", 鄙视: "e148", 委屈: "e149", 快哭了: "e150", 阴险: "e151", 亲亲: "e152", 吓: "e153", 可怜: "e154", 菜刀: "e155", 西瓜: "e156", 啤酒: "e157", 篮球: "e158", 乒乓: "e159",
+  咖啡: "e160", 饭: "e161", 猪头: "e162", 玫瑰: "e163", 凋谢: "e164", 示爱: "e165", 爱心: "e166", 心碎: "e167", 蛋糕: "e168", 闪电: "e169", 炸弹: "e170", 刀: "e171", 足球: "e172", 瓢虫: "e173", 便便: "e174", 月亮: "e175", 太阳: "e176", 礼物: "e177", 拥抱: "e178", 强: "e179", 弱: "e180", 握手: "e181", 胜利: "e182", 抱拳: "e183", 勾引: "e184", 拳头: "e185", 差劲: "e186", 爱你: "e187", NO: "e188", OK: "e189",
+  爱情: "e190", 飞吻: "e191", 跳跳: "e192", 发抖: "e193", 怄火: "e194", 转圈: "e195", 磕头: "e196", 回头: "e197", 跳绳: "e198", 挥手: "e199", 激动: "e200", 街舞: "e201", 献吻: "e202", 左太极: "e203", 右太极: "e204",
+  泪奔: "e243", 喷血: "e247", 托腮: "e282",
+  捂脸: "e10264", emm: "e10270", 吃瓜: "e10271", 呵呵哒: "e10272", 我酸了: "e10273", 太南了: "e10274", 睁眼: "e10289", 崇拜: "e10318", 比心: "e10319",
+  变形: "e400343", 摸头: "e400843", 飞吻2: "e400844", 亲亲2: "e400845", 大笑: "e400852", 开心: "e400853", 喜欢: "e400860", 爱你2: "e400861",
+};
+
+/** 多对一别名：与桥接 EMOJI_ALIASES + 私聊 face 对齐；狗头/旺柴 用桥接的 e249(doge) */
+const QZONE_EMOJI_ALIASES: Record<string, string> = {
+  狗头: "e249", doge: "e249", 旺柴: "e249", 社会社会: "e249",
+  OK: "e189", ok: "e189", 好的: "e189",
+  耶: "e182", 胜利: "e182", V: "e182",
+  捂脸: "e10264", 笑哭: "e10264", 泪目: "e10264",
+  我太难了: "e10274", 太南了: "e10274",
+  叹气: "e10274", 无奈: "e10274",
+  翻白眼: "e122", 白眼: "e122",
+  呲牙: "e113", 龇牙: "e113",
+  抱拳: "e183", 握手: "e181",
+  谢谢: "e312", 感谢: "e312", 苦涩: "e150",
+  托腮: "e282", 祈祷: "e302",
+};
+
+/** 根据名称解析 QZone 表情代码：先别名、再精确、再模糊包含，与私聊 findFaceId 一致 */
+function findQzoneEmojiCode(name: string): string | undefined {
+  const n = name.trim();
+  if (!n) return undefined;
+  const alias = QZONE_EMOJI_ALIASES[n];
+  if (alias) return alias;
+  const exact = QZONE_EMOJI_NAME_TO_CODE[n];
+  if (exact) return exact;
+  for (const [canonicalName, code] of Object.entries(QZONE_EMOJI_NAME_TO_CODE)) {
+    if (canonicalName.includes(n) || n.includes(canonicalName)) return code;
+  }
+  return undefined;
+}
+
+/** 将 content 中的 [名称] 转为 QZone 的 [em]eXXX[/em]，保证发到空间后显示为表情而非原文（多对一解析） */
+function convertBracketNamesToQzoneEm(content: string): string {
+  if (!content || !content.includes("[")) return content;
+  return content.replace(/\[([^\]]+)\]/g, (match, name: string) => {
+    const code = findQzoneEmojiCode(name);
+    return code ? `[em]${code}[/em]` : match;
+  });
+}
 
 export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
   const selfId = ctx.config.connection.selfId || "unknown";
@@ -54,6 +105,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         let content = String(params.content ?? "");
         if (!content) return textResult("[错误] 缺少 content");
         content = normalizeFaceFormatForQzone(content);
+        content = convertBracketNamesToQzoneEm(content);
         const images = Array.isArray(params.images)
           ? (params.images as unknown[]).map((i) => String(i))
           : undefined;
@@ -190,7 +242,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 4. qzone_comment ──
     {
       name: "qzone_comment",
-      description: `评论说说；也可回复某条评论（传 reply_comment_id 与 reply_uin）。必填 tid、content。回复时服务端会自动添加 @提及 格式，content 只需写回复正文。评论自己的说说可加 user_id=${selfId}。表情与 QQ 聊天一致：在 content 中写 [表情:名称]，如 [表情:微笑][表情:狗头]，与 qq_send_message 格式相同；可用 qzone_emoji_list 查看可用表情。`,
+      description: `评论说说；回复某条评论时传 reply_comment_id 与 reply_uin。必填 tid、content（只写正文，@ 由服务端自动加）。回复空间评论时必须调用本工具，不要用 qq_send_message 把本工具名或参数当私聊内容发出。表情在 content 中写 [表情:名称]；可用 qzone_emoji_list 查看。`,
       parameters: {
         type: "object",
         required: ["tid", "content"],
@@ -209,6 +261,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         let content = String(params.content ?? "");
         if (!tid || !content) return textResult("[错误] 缺少 tid / content");
         content = normalizeFaceFormatForQzone(content);
+        content = convertBracketNamesToQzoneEm(content);
         const userId = params.user_id ? String(params.user_id) : undefined;
         log.info?.(`[QZone-Tool] qzone_comment called: tid=${tid} content=${content.slice(0, 40)}`);
         const replyId = params.reply_comment_id ? String(params.reply_comment_id) : undefined;
