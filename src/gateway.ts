@@ -23,12 +23,14 @@ import type { QQMessage } from "./napcat/types.js";
 import type { PluginLogger, PluginRuntime, OpenClawConfig } from "./types-compat.js";
 import { zh as t } from "./locale/zh.js";
 
-/** 若内容像内部错误（JSON 解析、API 校验等），返回友好提示，避免把堆栈/错误原文发给用户 */
+/** 若内容像内部错误（JSON 解析、API 校验、流式事件顺序等），返回友好提示，避免把堆栈/错误原文发给用户 */
 function sanitizeReplyText(text: string): string {
   if (!text || typeof text !== "string") return text;
   const s = text.trim();
   if (
     /^Unexpected\s+non-whitespace\s+character\s+after\s+JSON/i.test(s) ||
+    /Unexpected\s+event\s+order/i.test(s) ||
+    /\bmessage_start\b.*\bmessage_stop\b|\bcontent_block_stop\b.*\bmessage_start\b/i.test(s) ||
     /position\s+\d+.*column\s+\d+/i.test(s) ||
     /SyntaxError|JSON\.parse/i.test(s) ||
     /validation\s+errors?.*Field\s+required/i.test(s) ||

@@ -350,7 +350,10 @@ async function forwardToOpenClaw(message, api) {
         }
       }
       if (response?.message?.content) {
-        const replyText = response.message.content;
+        let replyText = response.message.content;
+        if (/Unexpected\s+event\s+order|\bmessage_start\b.*\bmessage_stop\b|\bcontent_block_stop\b.*\bmessage_start\b/i.test(String(replyText).trim())) {
+          replyText = "回复解析异常，请再发一句试试。";
+        }
         await client.sendPrivateMsg(userId, replyText);
         console.log("[NapCat QQ] Agent reply sent");
       } else if (response) {

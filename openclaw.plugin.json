@@ -1,8 +1,6 @@
 {
   "id": "napcat-qq",
-  "name": "napcat-qq",
-  "description": "QQ channel integration via NapCat (OneBot v11 protocol)",
-  "version": "2.0.0",
+  "channels": ["napcat-qq"],
   "configSchema": {
     "type": "object",
     "additionalProperties": true,

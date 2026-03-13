@@ -45,7 +45,7 @@ const plugin = {
       if (override) {
         return { modelOverride: override.model, providerOverride: override.provider };
       }
-    });
+    }, { name: "napcat-qq:before_model_resolve" });
 
     const qqChannel = createQQChannelPlugin(ctx, runtime);
     api.registerChannel({ plugin: qqChannel as never });

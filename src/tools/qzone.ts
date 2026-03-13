@@ -15,6 +15,21 @@ function formatResponse(res: QzoneBridgeResponse, successMsg?: string): string {
   return `[QZone 错误] ${res.message ?? `retcode=${res.retcode}`}`;
 }
 
+/** 将说说/评论时间戳或已有字符串格式化为便于 AI 阅读的日期时间（如 2026-03-13 09:00） */
+function formatQzoneTimeForDisplay(msg: Record<string, unknown>): string {
+  const createTime2 = msg.createTime2 ?? msg.create_time2;
+  if (typeof createTime2 === "string" && createTime2.trim()) return createTime2.trim();
+  const createTime = msg.createTime ?? msg.create_time ?? msg.createtime ?? msg.time ?? msg.visitTime;
+  if (typeof createTime === "string" && createTime.trim()) return createTime.trim();
+  const ts = msg.created_time ?? msg.createdTime ?? msg.createtime ?? msg.time ?? msg.visitTime;
+  if (typeof ts === "number" && Number.isFinite(ts)) {
+    const ms = ts < 1e12 ? ts * 1000 : ts;
+    const d = new Date(ms);
+    return d.toISOString().replace("T", " ").slice(0, 16);
+  }
+  return "未知时间";
+}
+
 /** 与 onebot-qzone 桥接 EMOJI_NAME_MAP 对齐（refactor 后 e190-e204 修正、doge=e249、新增 e10264 捂脸等） */
 const QZONE_EMOJI_NAMES = [
   "微笑", "撇嘴", "色", "发呆", "得意", "流泪", "害羞", "闭嘴", "睡", "大哭", "尴尬", "发怒", "调皮", "呲牙", "惊讶", "难过", "酷", "冷汗", "抓狂", "吐", "偷笑", "可爱", "白眼", "傲慢", "饥饿", "困", "惊恐", "流汗", "憨笑", "大兵",
@@ -201,7 +216,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const uin = String(msg.uin ?? msg.owner ?? "").trim() || "?";
           const rawContent = String(msg.content ?? msg.con ?? "");
           const text = rawContent.slice(0, 80) + (rawContent.length > 80 ? "…" : "");
-          const time = msg.created_time ?? msg.createTime ?? "";
+          const time = formatQzoneTimeForDisplay(msg);
           const cmtNum = msg.cmtnum ?? msg.commentnum ?? 0;
           const likeNum = msg.likenum ?? 0;
           const picArr = msg.pic as Array<{ url?: string }> | undefined;
@@ -381,7 +396,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const id = c.commentid ?? c.comment_id ?? c.id ?? "";
           const name = c.name ?? c.nickname ?? c.user?.toString() ?? "?";
           const text = String(c.content ?? "").slice(0, 100);
-          const time = c.create_time ?? c.createTime ?? c.createtime ?? "";
+          const time = formatQzoneTimeForDisplay(c as Record<string, unknown>);
           const uin = c.uin ?? c.commentuin ?? c.user_id ?? "";
           // 二级评论：feeds3 返回 is_reply / reply_to_nickname / reply_to_uin / parent_comment_id
           const isReply = c.is_reply ?? c.isReply ?? false;
@@ -481,7 +496,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
 
         const lines = items.slice(0, 20).map((v) => {
           const name = v.name ?? v.nickname ?? v.uin ?? "?";
-          const time = v.time ?? v.visitTime ?? "";
+          const time = formatQzoneTimeForDisplay(v as Record<string, unknown>);
           const src = v._source_name ?? "";
           return `${name} (${time})${src ? ` 来自${src}` : ""}`;
         });
@@ -523,7 +538,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const uin = String(f.uin ?? "");
           const rawContent = String(f.content ?? f.con ?? "");
           const text = rawContent.slice(0, 80) + (rawContent.length > 80 ? "…" : "");
-          const time = f.created_time ?? f.createTime ?? "";
+          const time = formatQzoneTimeForDisplay(f as Record<string, unknown>);
           const picArr = f.pic as Array<{ url?: string }> | undefined;
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
           const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
