@@ -96,6 +96,8 @@ export interface QQMessage {
   imageUrls: string[];
   /** OneBot 图片段的 file 参数，用于 get_image，与 imageUrls 一一对应（可能为空） */
   imageFiles: string[];
+  /** 图片段的 file_id，与 imageUrls 一一对应（NapCat 等实现常用，与 file 二选一） */
+  imageFileIds: string[];
 }
 
 export interface OneBotApiResult {

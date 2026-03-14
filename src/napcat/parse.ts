@@ -12,6 +12,7 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
   const files: QQFileInfo[] = [];
   const imageUrls: string[] = [];
   const imageFiles: string[] = [];
+  const imageFileIds: string[] = [];
   const segmentsSeen: Array<{ type: string; value?: string }> = [];
 
   if (Array.isArray(message)) {
@@ -52,9 +53,11 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
         case "image": {
           const url = String(data.url ?? data.file ?? "");
           const fileParam = String(data.file ?? data.filename ?? "");
-          content += `[图片:${url}]`;
-          imageUrls.push(url || fileParam);
+          const fileId = String(data.file_id ?? data.fileId ?? "");
+          content += `[图片:${url || fileParam || fileId || "?"}]`;
+          imageUrls.push(url || fileParam || fileId);
           imageFiles.push(fileParam || url);
+          imageFileIds.push(fileId);
           segmentsSeen.push({ type: "image" });
           break;
         }
@@ -119,5 +122,6 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
     files,
     imageUrls,
     imageFiles,
+    imageFileIds,
   };
 }

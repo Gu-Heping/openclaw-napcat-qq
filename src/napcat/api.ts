@@ -104,7 +104,10 @@ export class NapCatAPI {
     return this.request("POST", "/upload_group_file", d);
   }
 
-  getImage(file: string) { return this.request("POST", "/get_image", { file }); }
+  /** 获取图片：传 file 或 file_id 其一即可（NapCat/OneBot 均支持） */
+  getImage(fileOrFileId: string, useFileId = false) {
+    return this.request("POST", "/get_image", useFileId ? { file_id: fileOrFileId } : { file: fileOrFileId });
+  }
   getFile(fileId: string) { return this.request("POST", "/get_file", { file_id: fileId }); }
   getForwardMsg(messageId: string) { return this.request("POST", "/get_forward_msg", { message_id: messageId }); }
 
