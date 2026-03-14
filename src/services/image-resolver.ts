@@ -68,9 +68,9 @@ export class ImageResolver {
         return false;
       };
 
-      // 先试 file，再试 file_id（与 OpenClaw 原 onebot 做法一致，兼容 NapCat 多种上报）
-      if (fileParam) resolved = await tryGetImage(fileParam, false);
-      if (!resolved && fileId) resolved = await tryGetImage(fileId, true);
+      // NapCat 渠道常用 file_id，get_image(file_id) 返回 base64 最可靠；无 file_id 时再试 file（路径/旧实现）
+      if (fileId) resolved = await tryGetImage(fileId, true);
+      if (!resolved && fileParam) resolved = await tryGetImage(fileParam, false);
 
       // 若 get_image 未返回可用数据，且消息里带 http(s) url（如部分实现直接上报 url），则直接拉取
       if (!resolved && url && (url.startsWith("http://") || url.startsWith("https://"))) {
