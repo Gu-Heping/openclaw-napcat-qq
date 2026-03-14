@@ -71,6 +71,39 @@ sudo systemctl restart openclaw-gateway
 
 启动后查看日志中是否有 `[napcat-qq] ... registered`，确认插件已加载。
 
+## 建议以非 root 运行
+
+OpenClaw / Gateway 建议在**普通用户**下运行，不要用 root，以便与后续部署方式一致。
+
+- 将插件与 OpenClaw 状态目录放在该用户下，例如 `~/.openclaw`、`~/.openclaw/extensions/napcat-qq`（`~` 为该用户 HOME）。
+- `openclaw.json` 里 `plugins.load.paths` 指向该用户下的插件绝对路径。
+- 若使用 Docker NapCat，宿主机「收文件目录」也建议落在该用户可写路径下（见下节），并设置 `NAPCAT_RECEIVED_FILE_HOST_PATH` 为该路径，这样看图时的容器路径映射才能正确生效。
+
+## Docker NapCat 与看图要点
+
+当 NapCat 以 **Docker** 方式部署、Gateway 跑在**宿主机**时，用户发图需满足以下设置，Agent 才能正确看图并回复。
+
+### 1. OneBot 消息格式
+
+NapCat 的 OneBot 配置里必须使用 **array** 格式上报消息，否则图片等多媒体无法按 segment 解析：
+
+- 在挂载给 NapCat 的配置目录中（例如 `napcat_onebot_config/onebot11.json`），对 **httpServers** 和 **websocketServers** 的每个 server 设置：
+  - `"messagePostFormat": "array"`
+- 若为 `string` 或未设置，图片会以 CQ 码字符串上报，本插件无法解析出图片段，看图会失败。
+
+### 2. 收文件目录与容器路径映射
+
+NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config/QQ`）。`get_image` 返回的 `d.file` 是**容器内路径**，宿主机上的 Gateway 无法直接访问。
+
+- **docker-compose** 需把宿主机某目录挂载为容器内 `/app/.config/QQ`，例如：
+  - `volumes: ["${NAPCAT_RECEIVED_FILE_HOST_PATH}:/app/.config/QQ"]`
+- **宿主机环境变量**：Gateway 进程所在环境需能读到 **`NAPCAT_RECEIVED_FILE_HOST_PATH`**，且值为上述宿主机目录的**绝对路径**（与 docker-compose 左侧一致）。本插件会用该变量把 `get_image` 返回的容器路径映射成宿主机路径再读图。
+- **未设置时的回退**：若未设置 `NAPCAT_RECEIVED_FILE_HOST_PATH`，插件会使用 `paths.workspace/qq_files/napcat_config` 作为宿主机目录。因此若用非 root 用户运行，建议把收文件目录放在该用户的 workspace 下，或在启动 Gateway 前导出 `NAPCAT_RECEIVED_FILE_HOST_PATH`（例如在 systemd 的 `Environment=` 或启动脚本里 `export`）。
+
+### 3. 看图解析顺序
+
+插件会依次尝试：`get_image` 的 **file_id** → **file**（含 URL）→ 消息中的图片 URL 直链拉取。NapCat 支持 `file_id` 时优先用 file_id 获取 base64；若返回 `d.file` 为容器路径，则按上一条做宿主机路径映射后再读文件。
+
 ## 配置
 
 在 `openclaw.json` 中需同时满足：
@@ -118,6 +151,8 @@ sudo systemctl restart openclaw-gateway
 | **limits** | object | 重试、超时、消息/文件大小、历史条数等 | 见 openclaw.plugin.json |
 | **network** | object | 重连、ping、fetch 超时等 | 见 openclaw.plugin.json |
 | **paths** | object | workspace、imageTemp、sessionsDir、containerPrefixes 覆盖 | 默认基于 OPENCLAW_HOME / HOME |
+
+- **Docker 看图**：宿主机需设置环境变量 `NAPCAT_RECEIVED_FILE_HOST_PATH`（与 docker 挂载的宿主机路径一致），否则见上文「Docker NapCat 与看图要点」。
 
 - **behavior**：`botNames`（@ 触发名）、`helpKeywords`、`questionPatterns`、`groupReplyProbInConvo` / `groupReplyProbRandom`、`groupReplyWindowMs`、`minIntervalMs`、`dedupTtlMs`。
 - **proactive**：`enabled`、`checkIntervalMs`、`minGlobalIntervalMs`、`perUserIntervalMs`、`minSinceUserMsgMs`、`quietHoursStart` / `quietHoursEnd`、`pendingKeywords`。
@@ -189,6 +224,12 @@ sudo systemctl restart openclaw-gateway
 - **原因**：OpenClaw 核心或模型在解析某段内容（如模型输出、工具结果）时执行了 `JSON.parse`，输入不是合法 JSON（例如带前缀/后缀、被截断），异常文案被当作回复内容下发。
 - **本插件已做**：发送前若检测到该类文案会替换为「回复解析异常，请再发一句试试。」；若使用 legacy 入口（`index.js`），会先尝试从 stdout 中按字符串边界提取第一个完整 JSON 再解析，减少因前后缀导致的解析失败。
 - **治本**：需在 OpenClaw 核心侧保证：出错时不要将原始 `JSON.parse` 异常直接作为回复内容；或对「可能含前后缀」的字符串先提取再解析。
+
+### 用户发图后 Bot 只回复 [qqimg] 链接、无法看图
+
+- **原因**：图片未解析成宿主机可读路径，Agent 只收到 URL 文本或 MediaUrls，未收到 MediaPaths。
+- **检查**：NapCat 为 Docker 时，确认（1）OneBot 配置中 `messagePostFormat` 为 `"array"`；（2）宿主机环境变量 `NAPCAT_RECEIVED_FILE_HOST_PATH` 已设置且与 docker-compose 中挂载的宿主机路径一致；（3）Gateway 以能访问该目录的用户运行（建议非 root，见上文「建议以非 root 运行」）。
+- **详见**：上文「Docker NapCat 与看图要点」。
 
 ### 回复出现「53 validation errors」「Field required 'function'」等 API 校验错误
 

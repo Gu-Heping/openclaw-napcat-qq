@@ -18,61 +18,75 @@ export class ImageResolver {
     const maxSize = this.config.limits.imageMaxSize;
     const tempDir = this.config.paths.imageTemp;
 
-    for (let i = 0; i < msg.imageUrls.length; i++) {
-      const url = msg.imageUrls[i];
-      const fileParam = files[i] || "";
-      const fileId = fileIds[i] ?? "";
-      let resolved = false;
-
-      const tryGetImage = async (param: string, useFileId: boolean): Promise<boolean> => {
-        if (!param) return false;
-        try {
-          const result = await this.api.getImage(param, useFileId);
-          if (result.status !== "ok" || !result.data) return false;
-          const d = result.data as Record<string, unknown>;
-          const localPath = d.file ? String(d.file) : "";
-          const base64 = d.base64 ? String(d.base64) : "";
-          const apiUrl = d.url ? String(d.url) : "";
-          if (localPath && path.isAbsolute(localPath) && fs.existsSync(localPath)) {
+    const tryGetImage = async (param: string, useFileId: boolean): Promise<boolean> => {
+      if (!param) return false;
+      try {
+        const result = await this.api.getImage(param, useFileId);
+        if (result.status !== "ok" || !result.data) return false;
+        const d = result.data as Record<string, unknown>;
+        let localPath = d.file ? String(d.file) : "";
+        const base64 = d.base64 ? String(d.base64) : "";
+        const apiUrl = d.url ? String(d.url) : "";
+        if (localPath && path.isAbsolute(localPath)) {
+          const hostPath =
+            process.env["NAPCAT_RECEIVED_FILE_HOST_PATH"] ??
+            path.join(this.config.paths.workspace, "qq_files", "napcat_config");
+          if (hostPath) {
+            for (const prefix of this.config.paths.containerPrefixes) {
+              if (localPath.startsWith(prefix)) {
+                const mapped = path.join(hostPath, localPath.slice(prefix.length));
+                if (fs.existsSync(mapped)) {
+                  localPath = mapped;
+                  break;
+                }
+              }
+            }
+          }
+          if (fs.existsSync(localPath)) {
             paths.push(localPath);
             return true;
           }
-          if (base64) {
-            const buf = Buffer.from(base64, "base64");
-            if (buf.length <= maxSize) {
+        }
+        if (base64) {
+          const buf = Buffer.from(base64, "base64");
+          if (buf.length <= maxSize) {
+            fs.mkdirSync(tempDir, { recursive: true });
+            const ext = (d.type as string) === "image/png" ? ".png" : ".jpg";
+            const outPath = path.join(tempDir, `${crypto.randomUUID()}${ext}`);
+            fs.writeFileSync(outPath, buf);
+            paths.push(outPath);
+            return true;
+          }
+        }
+        if (apiUrl && (apiUrl.startsWith("http://") || apiUrl.startsWith("https://"))) {
+          const resp = await fetch(apiUrl, {
+            signal: AbortSignal.timeout(this.config.network.imageFetchTimeoutMs),
+            headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
+          });
+          if (resp.ok) {
+            const buf = Buffer.from(await resp.arrayBuffer());
+            if (buf.length > 0 && buf.length <= maxSize) {
               fs.mkdirSync(tempDir, { recursive: true });
-              const ext = (d.type as string) === "image/png" ? ".png" : ".jpg";
-              const outPath = path.join(tempDir, `${crypto.randomUUID()}${ext}`);
+              const outPath = path.join(tempDir, `${crypto.randomUUID()}.jpg`);
               fs.writeFileSync(outPath, buf);
               paths.push(outPath);
               return true;
             }
           }
-          if (apiUrl && (apiUrl.startsWith("http://") || apiUrl.startsWith("https://"))) {
-            const resp = await fetch(apiUrl, {
-              signal: AbortSignal.timeout(this.config.network.imageFetchTimeoutMs),
-              headers: { "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" },
-            });
-            if (resp.ok) {
-              const buf = Buffer.from(await resp.arrayBuffer());
-              if (buf.length > 0 && buf.length <= maxSize) {
-                fs.mkdirSync(tempDir, { recursive: true });
-                const outPath = path.join(tempDir, `${crypto.randomUUID()}.jpg`);
-                fs.writeFileSync(outPath, buf);
-                paths.push(outPath);
-                return true;
-              }
-            }
-          }
-        } catch { /* ignore */ }
-        return false;
-      };
+        }
+      } catch { /* ignore */ }
+      return false;
+    };
 
-      // NapCat 渠道常用 file_id，get_image(file_id) 返回 base64 最可靠；无 file_id 时再试 file（路径/旧实现）
+    for (let i = 0; i < msg.imageUrls.length; i++) {
+      const url = msg.imageUrls[i];
+      const fileParam = files[i] || url;
+      const fileId = fileIds[i] ?? "";
+      let resolved = false;
+
       if (fileId) resolved = await tryGetImage(fileId, true);
       if (!resolved && fileParam) resolved = await tryGetImage(fileParam, false);
 
-      // 若 get_image 未返回可用数据，且消息里带 http(s) url（如部分实现直接上报 url），则直接拉取
       if (!resolved && url && (url.startsWith("http://") || url.startsWith("https://"))) {
         try {
           const resp = await fetch(url, {
