@@ -257,14 +257,20 @@ NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config
 - OpenClaw（Gateway 加载本插件；会话、回复、路由、记忆由 OpenClaw 提供）。
 - Node.js 18+，依赖仅 **ws**（见 package.json）。
 
+## 入口与构建（统一为 TS 单一路径）
+
+- **唯一入口**：根目录 **index.ts**（在 `package.json` 的 `openclaw.extensions` 中声明），再导出 **dist/index.js**。
+- **源码**：**src/** 下 TypeScript；**构建产出**：**dist/**。安装依赖后需执行 `npm run build`，Gateway 才会正确加载。
+- **已弃用**：根目录曾有的纯 JS 实现（index.js、client.js、websocket.js）已移至 **legacy/**，仅作参考，插件不再使用。
+
 ## 开发
 
 ```bash
 npm install
-npm run build   # 或 npm run watch
+npm run build   # 必须执行，否则 dist/ 为空则加载失败
 ```
 
-构建产物在 **dist/**，入口为 **dist/index.js**；插件通过 `openclaw.plugin.json` 的 `openclaw.extensions` 暴露。
+构建产物在 **dist/**，入口为 **index.ts → dist/index.js**；插件通过 `openclaw.plugin.json` 的 `openclaw.extensions` 暴露。
 
 ## License
 

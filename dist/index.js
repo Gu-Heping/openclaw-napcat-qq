@@ -17,7 +17,8 @@ const plugin = {
         const log = api.logger;
         const pluginConfig = api.pluginConfig;
         const runtime = api.runtime;
-        const config = resolveConfig(pluginConfig);
+        const channelsQq = api.config?.channels?.qq;
+        const config = resolveConfig(pluginConfig, channelsQq);
         const ctx = createPluginContext(config, log);
         const registry = new CommandRegistry();
         registry.registerAll([
@@ -39,7 +40,7 @@ const plugin = {
             if (override) {
                 return { modelOverride: override.model, providerOverride: override.provider };
             }
-        });
+        }, { name: "napcat-qq:before_model_resolve" });
         const qqChannel = createQQChannelPlugin(ctx, runtime);
         api.registerChannel({ plugin: qqChannel });
         const tools = createAllTools(ctx);

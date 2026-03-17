@@ -1,7 +1,25 @@
+import * as crypto from "node:crypto";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { AnyAgentTool, AgentToolResult } from "../types-compat.js";
 import type { PluginContext } from "../context.js";
 import type { QzoneBridgeResponse } from "../napcat/qzone-api.js";
 import { normalizeFaceFormatForQzone } from "../util/cq-code.js";
+
+/** 将 base64 图片写入临时文件并返回路径，供 image 工具使用（与 napcat-qq 聊天图片处理一致） */
+function writeBase64ImageToTemp(b64: string, contentType: string, imageTempDir: string): string | null {
+  try {
+    const buf = Buffer.from(b64, "base64");
+    if (buf.length === 0) return null;
+    const ext = (contentType || "").toLowerCase().includes("png") ? ".png" : ".jpg";
+    fs.mkdirSync(imageTempDir, { recursive: true });
+    const outPath = path.join(imageTempDir, `qzone_${crypto.randomUUID()}${ext}`);
+    fs.writeFileSync(outPath, buf);
+    return outPath;
+  } catch {
+    return null;
+  }
+}
 
 function textResult(text: string): AgentToolResult {
   return { content: [{ type: "text", text }] };
@@ -186,7 +204,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 3. qzone_get_posts ──
     {
       name: "qzone_get_posts",
-      description: `获取QQ空间说说列表。不传user_id则获取自己(${selfId})的说说，返回tid等信息。指定某好友时务必同时传 count（建议50）和 max_pages（建议15）以多翻页，否则可能只拿到很少几条。`,
+      description: `获取**指定用户**个人主页的说说列表（某人发的全部说说）。不传 user_id 时获取自己(${selfId})的说说。注意：用户若要看「好友动态」「朋友圈」「谁最近发了啥」应使用 qzone_get_friend_feeds 而非本工具。指定某好友时务必传 count（建议50）和 max_pages（建议15）以多翻页。带图的说说会返回图片本地路径；分析图片时请用 image 工具传入该路径，勿复制 base64。返回的图片路径可直接作为 image 工具的 image 参数传入进行识图。`,
       parameters: {
         type: "object",
         properties: {
@@ -204,13 +222,30 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const pos = Number(params.offset ?? 0);
         const maxPages = params.max_pages != null ? Math.min(30, Math.max(1, Number(params.max_pages))) : undefined;
         log.info?.(`[QZone-Tool] qzone_get_posts called: user_id=${userId ?? "self"} count=${num} offset=${pos} max_pages=${maxPages ?? "default"}`);
-        const res = await ctx.qzoneApi!.getEmotionList(userId, pos, num, maxPages);
+        const res = await ctx.qzoneApi!.getEmotionList(userId, pos, num, maxPages, true);
         if (res.status !== "ok") return textResult(formatResponse(res));
 
         const data = res.data as Record<string, unknown> | null;
         const msglist = (data?.msglist ?? data?.data) as Record<string, unknown>[] | undefined;
         if (!msglist?.length) return textResult("暂无说说");
 
+        // #region agent log
+        const firstWithPic = msglist.find((m) => Array.isArray(m.pic) && (m.pic as unknown[]).length > 0);
+        const firstPic = firstWithPic && Array.isArray(firstWithPic.pic) ? (firstWithPic.pic as Record<string, unknown>[])[0] : null;
+        const sampleMsgShapes = msglist.slice(0, 3).map((m, i) => ({
+          i,
+          keys: Object.keys(m),
+          picIsArray: Array.isArray(m.pic),
+          picLen: Array.isArray(m.pic) ? (m.pic as unknown[]).length : -1,
+          firstPicUrl: Array.isArray(m.pic) && (m.pic as unknown[]).length > 0 ? ((m.pic as Record<string, unknown>[])[0] as Record<string, unknown>)?.url : undefined,
+        }));
+        fetch('http://localhost:7243/ingest/73a4a46f-7107-4b2b-b2e9-e178389b2a24',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'qzone.ts:qzone_get_posts',message:'bridge response msglist shape',data:{msglistLen:msglist.length,hasFirstPic:!!firstPic,hasBase64:!!(firstPic && firstPic.base64),sampleMsgShapes},timestamp:Date.now(),hypothesisId:'H2'})}).catch(()=>{});
+        // #endregion
+
+        const MAX_BASE64_IMAGES_PER_POST = 2;
+        const MAX_POSTS_WITH_BASE64 = 2;
+        let postsWithBase64Count = 0;
+        const imageTempDir = ctx.config.paths.imageTemp;
         const lines = msglist.slice(0, num).map((msg) => {
           const tid = String(msg.tid ?? "");
           const uin = String(msg.uin ?? msg.owner ?? "").trim() || "?";
@@ -219,12 +254,41 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const time = formatQzoneTimeForDisplay(msg);
           const cmtNum = msg.cmtnum ?? msg.commentnum ?? 0;
           const likeNum = msg.likenum ?? 0;
-          const picArr = msg.pic as Array<{ url?: string }> | undefined;
+          const picArr = msg.pic as Array<{ url?: string; base64?: string; content_type?: string }> | undefined;
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
-          const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
+          let picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
+          const mayAttachBase64 = Array.isArray(picArr) && postsWithBase64Count < MAX_POSTS_WITH_BASE64;
+          if (mayAttachBase64) {
+            const pathParts: string[] = [];
+            let added = 0;
+            for (let i = 0; i < picArr!.length && added < MAX_BASE64_IMAGES_PER_POST; i++) {
+              const p = picArr![i] as Record<string, unknown>;
+              const b64 = p?.base64;
+              if (b64 && typeof b64 === "string") {
+                const ct = (p?.content_type ?? "image/jpeg") as string;
+                const localPath = writeBase64ImageToTemp(b64, ct, imageTempDir);
+                if (localPath) {
+                  pathParts.push(`\n  图片${i + 1}（可用 image 工具分析）: ${localPath}`);
+                  added++;
+                }
+              }
+            }
+            if (pathParts.length) {
+              picLine += pathParts.join("");
+              postsWithBase64Count++;
+            }
+          }
           return `[${time}] tid=${tid} ${uin} 💬${cmtNum} 👍${likeNum}\n  ${text}${picLine}`;
         });
-        return textResult(`说说列表 (${msglist.length} 条):\n\n${lines.join("\n\n")}`);
+        const hasImagePaths = lines.some((l) => l.includes("（可用 image 工具分析）"));
+        const headerHint = hasImagePaths
+          ? "【识图】下方带「图片N（可用 image 工具分析）」的路径可直接作为 image 工具的 image 参数传入进行识图。\n\n"
+          : "";
+        const out = `说说列表 (${msglist.length} 条):\n\n${headerHint}${lines.join("\n\n")}`;
+        // #region agent log
+        fetch('http://localhost:7243/ingest/73a4a46f-7107-4b2b-b2e9-e178389b2a24',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'qzone.ts:qzone_get_posts',message:'tool output summary',data:{postsWithBase64Count,outputContainsImagePaths:out.includes('（可用 image 工具分析）'),outLen:out.length},timestamp:Date.now(),hypothesisId:'H3'})}).catch(()=>{});
+        // #endregion
+        return textResult(out);
       },
     },
 
@@ -507,7 +571,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     // ── 8. qzone_get_friend_feeds ──
     {
       name: "qzone_get_friend_feeds",
-      description: "获取好友最近动态。每条返回完整操作参数，可直接传给 qzone_like / qzone_comment。翻页传上次结果的 next_cursor。",
+      description: "获取**好友动态**（好友最近发的说说，类似朋友圈时间线）。用户说「获取说说列表」「看看空间」「好友动态」「朋友圈」时应用本工具；qzone_get_posts 是看某人的个人说说列表。每条返回 tid/uin 等，可直接传给 qzone_like / qzone_comment。翻页传上次结果末尾的 next_cursor。带图的说说会返回图片本地路径；分析图片时请用 image 工具传入该路径，勿复制 base64。返回的图片路径可直接作为 image 工具的 image 参数传入进行识图。",
       parameters: {
         type: "object",
         properties: {
@@ -520,7 +584,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         if (err) return textResult(err);
         const cursor = params.cursor ? String(params.cursor) : undefined;
         const num = params.count != null ? Math.min(50, Math.max(1, Number(params.count))) : undefined;
-        const res = await ctx.qzoneApi!.getFriendFeeds(cursor, num);
+        const res = await ctx.qzoneApi!.getFriendFeeds(cursor, num, true);
         if (res.status !== "ok") return textResult(formatResponse(res));
 
         const data = res.data as Record<string, unknown> | null;
@@ -532,6 +596,10 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           return textResult("暂无好友说说（近期好友没有发说说）");
         }
 
+        const MAX_BASE64_IMAGES_PER_FEED = 2;
+        const MAX_FEEDS_WITH_BASE64 = 2;
+        let feedsWithBase64Count = 0;
+        const imageTempDir = ctx.config.paths.imageTemp;
         const lines = feeds.map((f) => {
           const name = f.name ?? f.nickname ?? f.uin ?? "?";
           const tid = String(f.tid ?? "");
@@ -539,9 +607,30 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           const rawContent = String(f.content ?? f.con ?? "");
           const text = rawContent.slice(0, 80) + (rawContent.length > 80 ? "…" : "");
           const time = formatQzoneTimeForDisplay(f as Record<string, unknown>);
-          const picArr = f.pic as Array<{ url?: string }> | undefined;
+          const picArr = f.pic as Array<{ url?: string; base64?: string; content_type?: string }> | undefined;
           const picUrls = Array.isArray(picArr) ? picArr.map((p) => p?.url).filter(Boolean) as string[] : [];
-          const picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
+          let picLine = picUrls.length ? `\n  图片: ${picUrls.join(" | ")}` : "";
+          const mayAttachBase64 = Array.isArray(picArr) && feedsWithBase64Count < MAX_FEEDS_WITH_BASE64;
+          if (mayAttachBase64) {
+            const pathParts: string[] = [];
+            let added = 0;
+            for (let i = 0; i < picArr!.length && added < MAX_BASE64_IMAGES_PER_FEED; i++) {
+              const p = picArr![i] as Record<string, unknown>;
+              const b64 = p?.base64;
+              if (b64 && typeof b64 === "string") {
+                const ct = (p?.content_type ?? "image/jpeg") as string;
+                const localPath = writeBase64ImageToTemp(b64, ct, imageTempDir);
+                if (localPath) {
+                  pathParts.push(`\n  图片${i + 1}（可用 image 工具分析）: ${localPath}`);
+                  added++;
+                }
+              }
+            }
+            if (pathParts.length) {
+              picLine += pathParts.join("");
+              feedsWithBase64Count++;
+            }
+          }
 
           const appShareTitle = String(f.appShareTitle ?? "");
           const appName = String(f.appName ?? "");
@@ -556,7 +645,11 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const nextLine = nextCursor
           ? `\n\n要看下一页，传 cursor="${nextCursor}"`
           : "\n\n（没有更多了）";
-        return textResult(`好友动态 ${pageLabel} (${feeds.length} 条):\n\n${lines.join("\n\n")}${nextLine}`);
+        const hasImagePaths = lines.some((l) => l.includes("（可用 image 工具分析）"));
+        const headerHint = hasImagePaths
+          ? "【识图】下方带「图片N（可用 image 工具分析）」的路径可直接作为 image 工具的 image 参数传入进行识图。\n\n"
+          : "";
+        return textResult(`好友动态 ${pageLabel} (${feeds.length} 条):\n\n${headerHint}${lines.join("\n\n")}${nextLine}`);
       },
     },
 

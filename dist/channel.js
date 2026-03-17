@@ -19,7 +19,7 @@ export function createQQChannelPlugin(ctx, runtime) {
             listAccountIds: () => [accountId],
             resolveAccount: () => config.connection,
             defaultAccountId: () => accountId,
-            isEnabled: () => true,
+            isEnabled: () => config.channelPolicy?.enabled !== false,
             isConfigured: () => !!config.connection.selfId,
             unconfiguredReason: () => t.unconfigured,
             describeAccount: () => ({

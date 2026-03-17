@@ -74,10 +74,14 @@ export class QzoneAPI {
   }
 
   // ── 说说 CRUD ──
-  getEmotionList(userId?: string, pos = 0, num = 20, maxPages?: number) {
-    const d: Record<string, unknown> = { pos, num };
+  /** 获取说说列表；includeImageData 为 true 时桥接会在每条说说的图片中附带 base64（默认 true，与 onebot-qzone 6fee393+ 一致） */
+  getEmotionList(userId?: string, pos = 0, num = 20, maxPages?: number, includeImageData = true) {
+    const d: Record<string, unknown> = { pos, num, include_image_data: includeImageData };
     if (userId) d.user_id = userId;
     if (maxPages != null) d.max_pages = maxPages;
+    // #region agent log
+    fetch('http://localhost:7243/ingest/73a4a46f-7107-4b2b-b2e9-e178389b2a24',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'qzone-api.ts:getEmotionList',message:'get_emotion_list request payload',data:{include_image_data:d.include_image_data,pos:d.pos,num:d.num},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
+    // #endregion
     return this.request("get_emotion_list", d);
   }
 
@@ -104,6 +108,17 @@ export class QzoneAPI {
 
   getFeedImages(userId: string, tid: string) {
     return this.request("get_feed_images", { user_id: userId, tid });
+  }
+
+  /** 拉取 QZone CDN 图片为 base64（桥接白名单：qpic.cn、photo.store.qq.com、qzonestyle.gtimg.cn），与 onebot-qzone fetch_image 一致 */
+  fetchImage(url: string) {
+    return this.request("fetch_image", { url });
+  }
+
+  /** 批量拉取 QZone CDN 图片为 base64，返回 data.images: Array<{ url, base64?, content_type? }> */
+  fetchImages(urls: string[]) {
+    if (urls.length === 0) return Promise.resolve({ status: "ok", retcode: 0, data: { images: [] }, message: undefined, echo: undefined });
+    return this.request("fetch_image", { urls });
   }
 
   // ── 评论 ──
@@ -151,11 +166,12 @@ export class QzoneAPI {
   }
 
   // ── 好友动态 / 访客 ──
-  getFriendFeeds(cursor?: string, num?: number) {
-    const d: Record<string, unknown> = {};
+  /** 获取好友动态；includeImageData 为 true 时桥接会在每条 pic 中附带 base64（默认 true） */
+  getFriendFeeds(cursor?: string, num?: number, includeImageData = true) {
+    const d: Record<string, unknown> = { include_image_data: includeImageData };
     if (cursor) d.cursor = cursor;
     if (num != null) d.num = num;
-    return this.request("get_friend_feeds", Object.keys(d).length ? d : undefined);
+    return this.request("get_friend_feeds", d);
   }
 
   getVisitorList(userId?: string) {

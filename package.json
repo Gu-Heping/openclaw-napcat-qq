@@ -4,6 +4,9 @@
   "private": true,
   "description": "OpenClaw QQ channel plugin via NapCat (OneBot v11)",
   "type": "module",
+  "scripts": {
+    "build": "tsc"
+  },
   "openclaw": {
     "extensions": [
       "./index.ts"
@@ -20,6 +23,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1"
+    "@types/ws": "^8.18.1",
+    "typescript": "^5.0.0"
   }
 }
