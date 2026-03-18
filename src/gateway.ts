@@ -93,13 +93,6 @@ function shouldFlushFirstPartial(text: string): boolean {
   return /[\u3002\uFF01\uFF1F!?\uFF1A:\uFF1B;]/.test(compact.slice(-1));
 }
 
-function isShortPingLikeMessage(text: string): boolean {
-  const compact = text.replace(/\s+/g, "").trim().toLowerCase();
-  if (!compact) return false;
-  if (compact.length <= 2 && /^[?？!！嗯哦啊呀哈在1-9]+$/u.test(compact)) return true;
-  return /^(在吗|在不|在没|在嘛|在？|在\?|在!|在！|有人吗|忙吗|滴滴|ping)$/u.test(compact);
-}
-
 export interface GatewayParams {
   ctx: PluginContext;
   ocConfig: OpenClawConfig;
@@ -378,7 +371,6 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         `from=${msg.userId} target=${to} messageId=${msg.id} model=${modelLabel}`,
       );
       const partialEnabled = source === "chat";
-      const fallbackEnabled = partialEnabled && !isShortPingLikeMessage(body);
       const partialTarget = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;
       const partialIsGroup = msg.messageType === "group";
       let hasVisibleReply = false;
@@ -386,7 +378,6 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       let partialSentText = "";
       let partialBuffer = "";
       let partialFlushTimer: ReturnType<typeof setTimeout> | null = null;
-      let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
       const maxPartialMessages = 2;
 
       const clearPartialFlushTimer = (): void => {
@@ -396,16 +387,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         }
       };
 
-      const clearFallbackTimer = (): void => {
-        if (fallbackTimer) {
-          clearTimeout(fallbackTimer);
-          fallbackTimer = null;
-        }
-      };
-
       const sendVisibleReply = async (replyText: string, mediaUrl?: string): Promise<void> => {
         hasVisibleReply = true;
-        clearFallbackTimer();
         await sender.send(partialTarget, partialIsGroup, replyText, mediaUrl);
       };
 
@@ -433,18 +416,6 @@ export async function startGateway(params: GatewayParams): Promise<void> {
           });
         }, 700);
       };
-
-      if (fallbackEnabled) {
-        fallbackTimer = setTimeout(() => {
-          if (hasVisibleReply || partialSentCount > 0) return;
-          log.info?.(
-            `[QQ] Fallback hint source=${source} session=${route.sessionKey} messageId=${msg.id}`,
-          );
-          sendVisibleReply("\u5728\u7684\uff0c\u7a0d\u7b49\u4e0b\u3002").catch((e) => {
-            log.warn?.(`[QQ] Fallback hint send failed for ${route.sessionKey}: ${e}`);
-          });
-        }, 3000);
-      }
 
       const deliver = async (payload: Record<string, unknown>, _info: Record<string, unknown>) => {
         const deliveredAt = new Date().toISOString();
@@ -536,7 +507,6 @@ export async function startGateway(params: GatewayParams): Promise<void> {
           `[QQ] Reply dispatch end at=${replyDispatchFinishedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
         );
       } finally {
-        clearFallbackTimer();
         clearPartialFlushTimer();
         releaseChain();
         if (dispatchChains.get(route.sessionKey) === current) {
@@ -664,5 +634,4 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   await client.start(abortSignal);
   setStatus({ state: "disconnected", label: `QQ ${config.connection.selfId}` });
 }
-
 
