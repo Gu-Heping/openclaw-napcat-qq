@@ -93,6 +93,13 @@ function shouldFlushFirstPartial(text: string): boolean {
   return /[\u3002\uFF01\uFF1F!?\uFF1A:\uFF1B;]/.test(compact.slice(-1));
 }
 
+function isShortPingLikeMessage(text: string): boolean {
+  const compact = text.replace(/\s+/g, "").trim().toLowerCase();
+  if (!compact) return false;
+  if (compact.length <= 2 && /^[?？!！嗯哦啊呀哈在1-9]+$/u.test(compact)) return true;
+  return /^(在吗|在不|在没|在嘛|在？|在\?|在!|在！|有人吗|忙吗|滴滴|ping)$/u.test(compact);
+}
+
 export interface GatewayParams {
   ctx: PluginContext;
   ocConfig: OpenClawConfig;
@@ -371,14 +378,16 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         `from=${msg.userId} target=${to} messageId=${msg.id} model=${modelLabel}`,
       );
       const partialEnabled = source === "chat";
+      const fallbackEnabled = partialEnabled && !isShortPingLikeMessage(body);
       const partialTarget = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;
       const partialIsGroup = msg.messageType === "group";
       let hasVisibleReply = false;
-      let firstPartialSent = false;
-      let firstPartialText = "";
+      let partialSentCount = 0;
+      let partialSentText = "";
       let partialBuffer = "";
       let partialFlushTimer: ReturnType<typeof setTimeout> | null = null;
       let fallbackTimer: ReturnType<typeof setTimeout> | null = null;
+      const maxPartialMessages = 2;
 
       const clearPartialFlushTimer = (): void => {
         if (partialFlushTimer) {
@@ -400,17 +409,18 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         await sender.send(partialTarget, partialIsGroup, replyText, mediaUrl);
       };
 
-      const flushFirstPartial = async (reason: "threshold" | "idle"): Promise<void> => {
+      const flushPartialReply = async (reason: "threshold" | "idle"): Promise<void> => {
         clearPartialFlushTimer();
-        if (!partialEnabled || firstPartialSent) return;
+        if (!partialEnabled || partialSentCount >= maxPartialMessages) return;
         const trimmed = partialBuffer.trim();
         partialBuffer = "";
         if (!trimmed || isSuppressedReplyText(trimmed)) return;
-        firstPartialSent = true;
-        firstPartialText = trimmed;
+        partialSentCount += 1;
+        partialSentText += trimmed;
         log.info?.(
           `[QQ] Partial flush reason=${reason} source=${source} session=${route.sessionKey} ` +
-          `messageId=${msg.id} textLen=${trimmed.length} preview=${trimmed.replace(/\s+/g, " ").slice(0, 40)}`,
+          `messageId=${msg.id} partialIndex=${partialSentCount} textLen=${trimmed.length} ` +
+          `preview=${trimmed.replace(/\s+/g, " ").slice(0, 40)}`,
         );
         await sendVisibleReply(trimmed);
       };
@@ -418,19 +428,19 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const schedulePartialFlush = (): void => {
         clearPartialFlushTimer();
         partialFlushTimer = setTimeout(() => {
-          flushFirstPartial("idle").catch((e) => {
+          flushPartialReply("idle").catch((e) => {
             log.warn?.(`[QQ] Partial idle flush failed for ${route.sessionKey}: ${e}`);
           });
         }, 700);
       };
 
-      if (partialEnabled) {
+      if (fallbackEnabled) {
         fallbackTimer = setTimeout(() => {
-          if (hasVisibleReply || firstPartialSent) return;
+          if (hasVisibleReply || partialSentCount > 0) return;
           log.info?.(
             `[QQ] Fallback hint source=${source} session=${route.sessionKey} messageId=${msg.id}`,
           );
-          sendVisibleReply("\u6211\u5148\u770b\u4e00\u4e0b\uff0c\u7a0d\u7b49\u3002").catch((e) => {
+          sendVisibleReply("\u5728\u7684\uff0c\u7a0d\u7b49\u4e0b\u3002").catch((e) => {
             log.warn?.(`[QQ] Fallback hint send failed for ${route.sessionKey}: ${e}`);
           });
         }, 3000);
@@ -454,10 +464,10 @@ export async function startGateway(params: GatewayParams): Promise<void> {
             `preview=${(text ?? "").replace(/\s+/g, " ").slice(0, 40)}`,
           );
           clearPartialFlushTimer();
-          if (text && firstPartialSent && firstPartialText) {
+          if (text && partialSentText) {
             const trimmed = text.trimStart();
-            if (trimmed.startsWith(firstPartialText)) {
-              text = trimmed.slice(firstPartialText.length).trimStart();
+            if (trimmed.startsWith(partialSentText)) {
+              text = trimmed.slice(partialSentText.length).trimStart();
             }
           }
           if (!text && !mediaUrl) return;
@@ -499,12 +509,17 @@ export async function startGateway(params: GatewayParams): Promise<void> {
           onPartialReply: async (payload: Record<string, unknown>, ...args: unknown[]) => {
             const base = result.replyOptions.onPartialReply as ((...innerArgs: unknown[]) => unknown) | undefined;
             await base?.(payload, ...args);
-            if (!partialEnabled || firstPartialSent) return;
+            if (!partialEnabled || partialSentCount >= maxPartialMessages) return;
             const nextText = typeof payload.text === "string" ? sanitizeReplyText(payload.text) : "";
             if (!nextText) return;
-            partialBuffer = mergePartialText(partialBuffer, nextText);
+            const composed = `${partialSentText}${partialBuffer}`;
+            partialBuffer = nextText.startsWith(composed)
+              ? nextText.slice(partialSentText.length)
+              : nextText.startsWith(partialSentText)
+                ? nextText.slice(partialSentText.length)
+                : mergePartialText(partialBuffer, nextText);
             if (shouldFlushFirstPartial(partialBuffer)) {
-              await flushFirstPartial("threshold");
+              await flushPartialReply("threshold");
               return;
             }
             schedulePartialFlush();
@@ -649,7 +664,5 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   await client.start(abortSignal);
   setStatus({ state: "disconnected", label: `QQ ${config.connection.selfId}` });
 }
-
-
 
 
