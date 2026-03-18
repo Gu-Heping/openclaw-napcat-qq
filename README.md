@@ -217,6 +217,10 @@ NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config
 
 工具参数与说明见 **src/tools/** 下各文件的 `name`、`description` 与 `parameters`。
 
+### QQ 空间说说图片与识图
+
+`qzone_get_friend_feeds`、`qzone_get_posts` 在桥接返回带 base64 的图片时，会将图片**写入临时文件**（与聊天看图一致，使用 `paths.imageTemp`），在工具结果中只返回**本地路径**及「可用 image 工具分析」说明，不把长 base64 嵌在文本里。用户或 Agent 要求「分析这张图」「图像识别」时，用 **image** 工具的 **image** 参数传入该路径即可识图。若桥接未返回 base64（如未开 `include_image_data` 或 CDN 拉图 502），则仅返回图片 URL 行。
+
 ### QQ 空间与工作区约定（feeds / posts）
 
 与 onebot-qzone 及 OpenClaw 工作区配合时，建议遵守：**今日是否已发** 只看 `memory/qzone/feeds/{今日日期}.md`（`[发布]` 或 `[状态]`）；**动态内容/灵感** 用 `qzone_get_friend_feeds` 当次结果或读 `memory/qzone/posts/`，**不**把 get_friend_feeds 结果写回 feeds。详见 [onebot-qzone README](https://github.com/Gu-Heping/onebot-qzone#openclaw-工作区约定feeds--posts-分工) 与工作区内 `QZONE.md`、`memory/qzone/README.md`。
