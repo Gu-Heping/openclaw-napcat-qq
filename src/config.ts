@@ -114,6 +114,7 @@ export const MODEL_DISPLAY_NAMES: Record<string, string> = {
   minimax: "MiniMax M2.1",
   qwen: "Qwen3 Coder",
   openrouter: "OpenRouter Auto",
+  glm: "GLM-5-Turbo（智谱）",
 };
 
 const DEFAULT_MODELS: Record<string, [string, string]> = {
@@ -125,6 +126,7 @@ const DEFAULT_MODELS: Record<string, [string, string]> = {
   minimax: ["openrouter", "minimax/minimax-m2.1"],
   qwen: ["openrouter", "qwen/qwen3-coder-next"],
   openrouter: ["openrouter", "auto"],
+  glm: ["glm", "glm-5-turbo"],
 };
 
 const DEFAULT_LIMITS: LimitsConfig = {

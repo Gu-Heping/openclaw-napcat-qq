@@ -1,4 +1,5 @@
 import type { QQMessage } from "../napcat/types.js";
+import { zh as t } from "../locale/zh.js";
 
 /**
  * Build a lightweight identity block for the AI.
@@ -20,7 +21,7 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
   const paths = [`memory/users/${userId}.md`];
   paths.push("memory/social/relationships.md");
   lines.push(`[记忆] ${paths.join(" | ")}`);
-  lines.push("[提示] 用 memory_search 语义检索记忆，用 write 更新记忆文件");
+  lines.push(t.identityHintPrivate);
   lines.push("[回复] 只输出要发给对方的那一句话或几句话，不要输出内心独白、推理过程、「用户说…」「我应该…」「让我…」等元描述；不要向用户提及「系统」「系统问你」「主动对话」等内部流程。");
 
   if (msg.content?.startsWith("[QQ空间")) {
@@ -40,7 +41,7 @@ export function buildGroupHeader(groupId: string): string {
     `[群聊模式] 你是 QQ 群 ${groupId} 里的同一个机器人。以下为群内多人对话，请以群成员身份连贯参与，保持统一人格。`,
     `[群头像] ${groupAvatar}`,
     `[群记忆] memory/groups/${groupId}.md | memory/social/relationships.md`,
-    `[提示] 用 memory_search 语义检索记忆，用 write 更新记忆文件。群内成员的个人记忆在 memory/users/ 下，可按 QQ 号或昵称检索。`,
+    t.identityHintGroup,
     `[回复] 只输出要发给群里的消息，不要输出内心独白、推理过程等元描述。`,
   ].join("\n");
 }

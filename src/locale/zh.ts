@@ -63,6 +63,10 @@ export const zh = {
   identityGroup: "[群聊]",
   identityMemory: "[记忆]",
   identityHint: "[提示] 用 memory_search 语义检索记忆，用 write 更新记忆文件",
+  identityHintPrivate:
+    "[提示] 回复前若涉及对方过往、偏好、约定或关系，先用 memory_search 再答。仅在出现长期偏好、重要日期、明确约定或关系变化时，用 write 更新上述文件；写事实与摘要，不写流水。寒暄与一次性问答不写入。可读 memory/_meta/users.json、memory/_meta/groups.json 作检索辅助（昵称对应 userId、群成员列表）；长期信息仍写回 memory 下的 .md。",
+  identityHintGroup:
+    "[提示] 回复前若涉及群规则、群内约定、成员关系或过往话题，先用 memory_search 再答。仅在群规则、长期约定、关系变化或成员稳定偏好出现时，用 write 更新上述文件或 memory/users/ 对应用户；写事实与摘要，不写「谁说了啥」的流水。寒暄与一次性对话不写入。可读 memory/_meta/users.json、memory/_meta/groups.json 作检索辅助；长期信息仍写回 memory 下的 .md。",
 
   // Memory templates
   memoryUserTemplate: (nickname: string, userId: string) =>

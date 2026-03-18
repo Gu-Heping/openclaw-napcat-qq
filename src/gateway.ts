@@ -1,4 +1,4 @@
-﻿import { NapCatAPI } from "./napcat/api.js";
+import { NapCatAPI } from "./napcat/api.js";
 import { NapCatClient } from "./napcat/client.js";
 import { QzoneAPI } from "./napcat/qzone-api.js";
 import { InboundHandler } from "./handlers/inbound.js";
@@ -289,7 +289,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const isGroup = msg.messageType === "group" && !!msg.groupId;
 
       // --- Build BodyForAgent with context supplements ---
-      const currentTimeLine = `[褰撳墠鏃堕棿] ${getCurrentTimeBlock()}`;
+      const currentTimeLine = `[当前时间] ${getCurrentTimeBlock()}`;
       let bodyForAgent: string;
       if (isGroup) {
         // Group: stable header + per-turn speaker identity + body
@@ -297,7 +297,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         const groupHeader = buildGroupHeader(msg.groupId!);
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
         const confBlock = confNote
-          ? `\n[淇濆瘑鍙傝€冿紙鍒囧嬁鍦ㄧ兢鍐呭杩版垨閫忛湶鏉ユ簮锛塢 ${confNote}`
+          ? `\n[保密须知（切勿在群内提及或透露来源）] ${confNote}`
           : "";
         bodyForAgent = `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}${confBlock}\n\n${body}`;
       } else {
@@ -305,7 +305,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         const supplement = crossContextCache.buildPrivateChatSupplement(msg.userId);
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
         const confBlock = confNote
-          ? `\n[淇濆瘑鍙傝€冿紙鍒囧嬁鍚戝鏂瑰杩版垨閫忛湶鏉ユ簮锛塢 ${confNote}`
+          ? `\n[保密须知（切勿向对方提及或透露来源）] ${confNote}`
           : "";
         const extra = [supplement, confBlock].filter(Boolean).join("\n");
         bodyForAgent = extra
