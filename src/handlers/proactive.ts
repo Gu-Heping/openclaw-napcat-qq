@@ -49,6 +49,7 @@ export class ProactiveManager {
   private loadActiveUsers(): void {
     const userIds = this.ctx.memoryManager.listUserIds();
     for (const uid of userIds) {
+      if (!/^[1-9]\d*$/.test(uid)) continue;
       this.activeUsers.set(uid, Date.now() - 3600_000);
     }
     this.ctx.log.info?.(`[QQ] Proactive: loaded ${this.activeUsers.size} users from memory`);
@@ -66,6 +67,7 @@ export class ProactiveManager {
     const candidates: Candidate[] = [];
 
     for (const [userId, lastActive] of this.activeUsers) {
+      if (!/^[1-9]\d*$/.test(userId)) continue;
       if (now - lastActive >= 7200_000) continue;
       const lastProactive = this.lastProactiveByUser.get(userId) ?? 0;
       if (now - lastProactive < pc.perUserIntervalMs) continue;

@@ -127,7 +127,7 @@ export class MemoryManager {
       return fs.readdirSync(dir)
         .filter((f) => f.endsWith(".md") && f !== "index.md")
         .map((f) => f.replace(".md", ""))
-        .filter((uid) => /^\d+$/.test(uid));
+        .filter((uid) => /^[1-9]\d*$/.test(uid));
     } catch {
       return [];
     }

@@ -182,6 +182,7 @@ function parseSummaryClearResult(text: string | null): SummaryClearTaskResult {
 function buildSummaryClearPrompt(params: {
   transcript: string;
   targetPath: string;
+  targetContent: string;
   chatType: "group" | "private";
   userId: string;
   groupId?: string;
@@ -195,13 +196,18 @@ function buildSummaryClearPrompt(params: {
     scopeHint,
     "请只根据下面给出的当前会话摘录判断是否需要更新记忆。",
     "如果内容没有长期价值，不要写入，最后只输出一行 MEMORY_SKIP|原因。",
-    "如果有长期价值，请使用 write 工具更新目标 Markdown 记忆文件。写入要求：",
+    "如果有长期价值，请更新目标 Markdown 记忆文件。优先使用 edit 工具，不要只停留在口头总结。",
+    "调用 edit 时，必须提供 path，以及 newText（或工具别名 new_string）。如果需要替换一段已有内容，请同时提供 oldText。",
     "1. 保留原文件结构，不要改坏现有标题。",
     "2. 写入事实、偏好、约定、长期项目、关系变化或稳定背景，不要抄聊天流水。",
     "3. 优先写到合适的 section，例如“用户笔记”“重要事件”“兴趣爱好”“聊天风格”。",
     "4. 不要写入 _meta JSON。",
     "5. 写入完成后，只输出一行 MEMORY_SAVED|<20到80字的中文总结>。",
-    "如果 write 失败，最后只输出一行 MEMORY_ERROR|原因。",
+    "如果 edit 或 write 失败，最后只输出一行 MEMORY_ERROR|原因。",
+    "",
+    "[目标记忆文件当前内容开始]",
+    params.targetContent || "(空文件)",
+    "[目标记忆文件当前内容结束]",
     "",
     "[当前会话摘录开始]",
     params.transcript,
@@ -723,6 +729,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     const prompt = buildSummaryClearPrompt({
       transcript,
       targetPath,
+      targetContent: beforeContent,
       chatType: isGroup ? "group" : "private",
       userId: msg.userId,
       groupId: msg.groupId,
