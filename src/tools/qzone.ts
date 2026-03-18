@@ -173,7 +173,8 @@ function extractComments(data: unknown): JsonObject[] {
 
 function extractFeeds(data: unknown): JsonObject[] {
   const obj = asObject(data);
-  const buckets = [obj?.feeds, obj?.feed_list, obj?.list, obj?.items, obj?.data];
+  // onebot-qzone get_friend_feeds 返回 msglist；兼容 feeds / feed_list 等
+  const buckets = [obj?.msglist, obj?.feeds, obj?.feed_list, obj?.list, obj?.items, obj?.data];
   for (const bucket of buckets) {
     const arr = asArray(bucket).map((item) => asObject(item)).filter(Boolean) as JsonObject[];
     if (arr.length > 0) return arr;
