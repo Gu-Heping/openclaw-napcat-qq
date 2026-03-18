@@ -11,6 +11,7 @@ import type { ImageResolver } from "./services/image-resolver.js";
 import type { CommandRegistry } from "./commands/registry.js";
 import type { CrossContextCache } from "./services/cross-context-cache.js";
 import type { ConfidentialNoteStore } from "./services/confidential-note-store.js";
+import type { ContactProfileStore } from "./services/contact-profile-store.js";
 
 export interface PluginContext {
   readonly config: BotConfig;
@@ -30,6 +31,7 @@ export interface PluginContext {
   commandRegistry: CommandRegistry | null;
   crossContextCache: CrossContextCache | null;
   confidentialNotes: ConfidentialNoteStore | null;
+  contactProfiles: ContactProfileStore | null;
 }
 
 export function createPluginContext(config: BotConfig, log: PluginLogger): PluginContext {
@@ -48,5 +50,6 @@ export function createPluginContext(config: BotConfig, log: PluginLogger): Plugi
     commandRegistry: null,
     crossContextCache: null,
     confidentialNotes: null,
+    contactProfiles: null,
   };
 }

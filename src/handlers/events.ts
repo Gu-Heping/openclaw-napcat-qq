@@ -4,6 +4,7 @@ import type { OneBotNoticeEvent, OneBotRequestEvent, QQMessage } from "../napcat
 import type { InboundHandler } from "./inbound.js";
 import type { FileDownloader } from "../services/file-downloader.js";
 import type { PluginLogger } from "../types-compat.js";
+import type { ContactProfileStore } from "../services/contact-profile-store.js";
 import { getSyntheticMessageId } from "../util/synthetic-id.js";
 
 interface PendingRequest {
@@ -33,6 +34,7 @@ export interface EventContext {
   log: PluginLogger;
   inbound: InboundHandler;
   fileDownloader: FileDownloader;
+  contactProfiles?: ContactProfileStore;
 }
 
 export class EventHandler {
@@ -46,10 +48,19 @@ export class EventHandler {
     const { notice_type, sub_type } = event;
 
     if (notice_type === "group_increase") {
+      if (event.group_id && event.user_id) {
+        this.ctx.contactProfiles?.recordGroupMembership(String(event.group_id), String(event.user_id), undefined, "active");
+      }
       this.ctx.log.info?.(`[QQ] 群 ${event.group_id} 新成员: ${event.user_id}`);
     } else if (notice_type === "group_decrease") {
+      if (event.group_id && event.user_id) {
+        this.ctx.contactProfiles?.recordGroupMembership(String(event.group_id), String(event.user_id), undefined, "left");
+      }
       this.ctx.log.info?.(`[QQ] 群 ${event.group_id} 成员离开: ${event.user_id}`);
     } else if (notice_type === "friend_add") {
+      if (event.user_id) {
+        this.ctx.contactProfiles?.recordFriendAdded(String(event.user_id));
+      }
       this.ctx.log.info?.(`[QQ] 新好友: ${event.user_id}`);
     } else if (notice_type === "offline_file") {
       this.handleOfflineFile(event);

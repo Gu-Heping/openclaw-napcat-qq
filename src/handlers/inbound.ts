@@ -8,6 +8,7 @@ import type { FileDownloader } from "../services/file-downloader.js";
 import type { CommandRegistry } from "../commands/registry.js";
 import type { CommandContext } from "../commands/types.js";
 import type { CrossContextCache } from "../services/cross-context-cache.js";
+import type { ContactProfileStore } from "../services/contact-profile-store.js";
 import { parseMessageEvent } from "../napcat/parse.js";
 import { buildIdentityBlock, getContextSummary, getSenderDisplayName } from "../util/identity.js";
 import { getFaceName } from "../napcat/face-map.js";
@@ -23,6 +24,7 @@ export interface InboundDeps {
   commandRegistry: CommandRegistry;
   cmdCtx: CommandContext;
   crossContextCache?: CrossContextCache;
+  contactProfiles?: ContactProfileStore;
   resolveSessionKey: (msg: QQMessage) => string;
   dispatchToAgent: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
 }
@@ -138,6 +140,12 @@ export class InboundHandler {
       `[QQ] ${msg.messageType === "group" ? `group ${msg.groupId}` : "private"} ` +
       `${getSenderDisplayName(msg)}(${msg.userId}): ${msg.content.slice(0, 60)}`,
     );
+
+    if (msg.messageType === "group" && msg.groupId) {
+      this.deps.contactProfiles?.recordGroupMessage(msg.groupId, msg.userId, getSenderDisplayName(msg));
+    } else {
+      this.deps.contactProfiles?.recordPrivateContact(msg.userId, getSenderDisplayName(msg));
+    }
 
     memoryManager.autoUpdateContextMemory(
       msg.userId,

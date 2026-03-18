@@ -286,4 +286,5 @@ export class MemoryManager {
       fs.writeFileSync(relPath, content);
     } catch { /* ignore */ }
   }
+
 }

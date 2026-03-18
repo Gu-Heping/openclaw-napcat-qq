@@ -13,6 +13,7 @@ import { ImageResolver } from "./services/image-resolver.js";
 import { QzoneEventListener } from "./services/qzone-event-listener.js";
 import { CrossContextCache } from "./services/cross-context-cache.js";
 import { ConfidentialNoteStore } from "./services/confidential-note-store.js";
+import { ContactProfileStore } from "./services/contact-profile-store.js";
 import { expandInlineFaces } from "./util/cq-code.js";
 import { getCurrentTimeBlock } from "./util/date.js";
 import { getSenderDisplayName, buildGroupHeader } from "./util/identity.js";
@@ -136,6 +137,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
 
   const crossContextCache = new CrossContextCache();
   const confidentialNotes = new ConfidentialNoteStore(config, log);
+  const contactProfiles = new ContactProfileStore(config.paths.workspace, log);
+  contactProfiles.bootstrapFromMemoryFiles();
 
   ctx.api = api;
   ctx.msgManager = msgManager;
@@ -146,6 +149,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   ctx.imageResolver = imageResolver;
   ctx.crossContextCache = crossContextCache;
   ctx.confidentialNotes = confidentialNotes;
+  ctx.contactProfiles = contactProfiles;
 
   if (config.qzone.enabled) {
     ctx.qzoneApi = new QzoneAPI(
@@ -479,6 +483,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     commandRegistry: ctx.commandRegistry!,
     cmdCtx,
     crossContextCache,
+    contactProfiles,
     resolveSessionKey,
     dispatchToAgent,
   });
@@ -489,6 +494,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     log,
     inbound,
     fileDownloader,
+    contactProfiles,
   });
 
   const proactive = new ProactiveManager({
