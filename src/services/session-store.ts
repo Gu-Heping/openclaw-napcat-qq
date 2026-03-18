@@ -41,6 +41,27 @@ export class SessionStore {
     }
   }
 
+  async removeSession(sessionKey: string): Promise<boolean> {
+    try {
+      if (!fs.existsSync(this.sessionsPath)) return false;
+      const store = JSON.parse(fs.readFileSync(this.sessionsPath, "utf-8"));
+      const entry = store[sessionKey];
+      if (!entry) return false;
+
+      if (entry.sessionFile && fs.existsSync(entry.sessionFile)) {
+        fs.unlinkSync(entry.sessionFile);
+      }
+
+      delete store[sessionKey];
+      fs.writeFileSync(this.sessionsPath, JSON.stringify(store, null, 2));
+      this.log.info?.(`[QQ] Removed temporary session: ${sessionKey}`);
+      return true;
+    } catch (e) {
+      this.log.warn?.(`[QQ] removeSession error: ${e}`);
+      return false;
+    }
+  }
+
   async persistSessionModel(
     sessionKey: string,
     modelProvider: string,

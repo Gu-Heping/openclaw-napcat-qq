@@ -17,6 +17,12 @@ export interface CommandContext {
   setModelOverride: (sessionKey: string, provider: string, model: string) => void;
   persistSessionModel: (sessionKey: string, provider: string, model: string) => Promise<boolean>;
   dispatchToAgent: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
+  runAgentTaskForText: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
+  runSummaryClearTask: (msg: QQMessage, identityBlock: string) => Promise<{
+    ok: boolean;
+    summary: string | null;
+    reason?: string;
+  }>;
 }
 
 export interface Command {

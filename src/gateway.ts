@@ -14,6 +14,7 @@ import { QzoneEventListener } from "./services/qzone-event-listener.js";
 import { CrossContextCache } from "./services/cross-context-cache.js";
 import { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 import { ContactProfileStore } from "./services/contact-profile-store.js";
+import * as fs from "node:fs";
 import { expandInlineFaces } from "./util/cq-code.js";
 import { getCurrentTimeBlock } from "./util/date.js";
 import { getSenderDisplayName, buildGroupHeader } from "./util/identity.js";
@@ -98,6 +99,114 @@ interface QzoneSyntheticEvent {
   nickname: string;
   detail: string;
   tid?: string;
+}
+
+interface SummaryClearTaskResult {
+  ok: boolean;
+  summary: string | null;
+  reason?: string;
+}
+
+function extractTextFromSessionRecord(record: Record<string, unknown>): string {
+  const message = record.message as Record<string, unknown> | undefined;
+  const content = message?.content;
+  if (Array.isArray(content)) {
+    return content
+      .map((part) => {
+        if (!part || typeof part !== "object") return "";
+        const typed = part as Record<string, unknown>;
+        return typeof typed.text === "string" ? typed.text : "";
+      })
+      .join("")
+      .trim();
+  }
+  if (typeof content === "string") return content.trim();
+  return "";
+}
+
+function buildTranscriptExcerpt(sessionFile: string | null, maxEntries = 24, maxChars = 6000): string {
+  if (!sessionFile || !fs.existsSync(sessionFile)) return "";
+
+  try {
+    const lines = fs.readFileSync(sessionFile, "utf-8")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const normalized = lines
+      .map((line) => {
+        try {
+          const parsed = JSON.parse(line) as Record<string, unknown>;
+          if (parsed.type !== "message") return "";
+          const message = parsed.message as Record<string, unknown> | undefined;
+          const role = typeof message?.role === "string" ? message.role : "";
+          if (role !== "user" && role !== "assistant") return "";
+          const text = extractTextFromSessionRecord(parsed);
+          if (!text) return "";
+          const speaker = role === "user" ? "用户" : "助手";
+          return `${speaker}: ${text.replace(/\s+/g, " ").trim()}`;
+        } catch {
+          return "";
+        }
+      })
+      .filter(Boolean);
+    const excerpt = normalized.slice(-maxEntries).join("\n");
+    return excerpt.length > maxChars ? excerpt.slice(-maxChars) : excerpt;
+  } catch {
+    return "";
+  }
+}
+
+function parseSummaryClearResult(text: string | null): SummaryClearTaskResult {
+  const trimmed = text?.trim();
+  if (!trimmed) {
+    return { ok: false, summary: null, reason: "AI 未返回有效结果" };
+  }
+
+  if (trimmed.startsWith("MEMORY_SAVED|")) {
+    return { ok: true, summary: trimmed.slice("MEMORY_SAVED|".length).trim() || "已写入会话总结" };
+  }
+  if (trimmed.startsWith("MEMORY_SKIP|")) {
+    return {
+      ok: false,
+      summary: null,
+      reason: trimmed.slice("MEMORY_SKIP|".length).trim() || "AI 判断当前内容不适合写入长期记忆",
+    };
+  }
+  if (trimmed.startsWith("MEMORY_ERROR|")) {
+    return { ok: false, summary: null, reason: trimmed.slice("MEMORY_ERROR|".length).trim() || "AI 写入记忆失败" };
+  }
+
+  return { ok: false, summary: null, reason: trimmed };
+}
+
+function buildSummaryClearPrompt(params: {
+  transcript: string;
+  targetPath: string;
+  chatType: "group" | "private";
+  userId: string;
+  groupId?: string;
+}): string {
+  const scopeHint = params.chatType === "group"
+    ? `当前是群聊总结。优先把本轮会话里对这个群长期有价值的信息写入 ${params.targetPath}。若涉及某个成员的稳定偏好，也可以同时更新对应的 memory/users/<userId>.md。当前群号: ${params.groupId ?? "-"}.`
+    : `当前是私聊总结。把本轮会话里对这个用户长期有价值的信息写入 ${params.targetPath}。当前用户 QQ: ${params.userId}.`;
+
+  return [
+    "[内部任务] 你现在不是在回复用户，而是在整理当前会话记忆。",
+    scopeHint,
+    "请只根据下面给出的当前会话摘录判断是否需要更新记忆。",
+    "如果内容没有长期价值，不要写入，最后只输出一行 MEMORY_SKIP|原因。",
+    "如果有长期价值，请使用 write 工具更新目标 Markdown 记忆文件。写入要求：",
+    "1. 保留原文件结构，不要改坏现有标题。",
+    "2. 写入事实、偏好、约定、长期项目、关系变化或稳定背景，不要抄聊天流水。",
+    "3. 优先写到合适的 section，例如“用户笔记”“重要事件”“兴趣爱好”“聊天风格”。",
+    "4. 不要写入 _meta JSON。",
+    "5. 写入完成后，只输出一行 MEMORY_SAVED|<20到80字的中文总结>。",
+    "如果 write 失败，最后只输出一行 MEMORY_ERROR|原因。",
+    "",
+    "[当前会话摘录开始]",
+    params.transcript,
+    "[当前会话摘录结束]",
+  ].join("\n");
 }
 
 function detectInboundSource(msg: QQMessage, body: string): InboundSource {
@@ -459,6 +568,179 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     }
   };
 
+  const runAgentTaskForText = async (
+    msg: QQMessage,
+    body: string,
+    identityBlock: string,
+    sessionKeyOverride?: string,
+  ): Promise<string | null> => {
+    const peer = { id: msg.userId };
+    const guildId = msg.groupId ?? null;
+    const route = runtime.channel.routing.resolveAgentRoute({
+      cfg: ocConfig, channel: "qq", accountId, peer, guildId,
+    });
+    const sessionKey = sessionKeyOverride ?? route.sessionKey;
+
+    const chatType = msg.messageType === "group" ? "group" : "dm";
+    const to = msg.messageType === "group" && msg.groupId ? `g:${msg.groupId}` : `p:${msg.userId}`;
+    const senderName = getSenderDisplayName(msg);
+    const mediaPaths = await imageResolver.resolveImagePaths(msg);
+    const isGroup = msg.messageType === "group" && !!msg.groupId;
+    const currentTimeLine = `[è¤°æ’³å¢ éƒå •æ£¿] ${getCurrentTimeBlock()}`;
+
+    let bodyForAgent: string;
+    if (isGroup) {
+      const groupHeader = buildGroupHeader(msg.groupId!);
+      const confNote = confidentialNotes.getNotesForUser(msg.userId);
+      const confBlock = confNote
+        ? `\n[æ·‡æ¿†ç˜‘é™å‚â‚¬å†¿ç´™é’å›§å¬é¦ã„§å…¢éå‘­î˜²æ©ç‰ˆåž¨é–«å¿›æ¹¶é‰ãƒ¦ç°®é”›å¡¢ ${confNote}`
+        : "";
+      bodyForAgent = `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}${confBlock}\n\n${body}`;
+    } else {
+      const supplement = crossContextCache.buildPrivateChatSupplement(msg.userId);
+      const confNote = confidentialNotes.getNotesForUser(msg.userId);
+      const confBlock = confNote
+        ? `\n[æ·‡æ¿†ç˜‘é™å‚â‚¬å†¿ç´™é’å›§å¬éšæˆî‡®é‚ç‘°î˜²æ©ç‰ˆåž¨é–«å¿›æ¹¶é‰ãƒ¦ç°®é”›å¡¢ ${confNote}`
+        : "";
+      const extra = [supplement, confBlock].filter(Boolean).join("\n");
+      bodyForAgent = extra
+        ? `${currentTimeLine}\n\n${identityBlock}\n${extra}\n\n${body}`
+        : `${currentTimeLine}\n\n${identityBlock}\n\n${body}`;
+    }
+
+    const msgCtx: Record<string, unknown> = {
+      Body: body,
+      BodyForAgent: bodyForAgent,
+      RawBody: msg.content,
+      CommandBody: msg.content,
+      BodyForCommands: msg.content,
+      From: msg.userId,
+      To: to,
+      SessionKey: sessionKey,
+      AccountId: accountId,
+      MessageSid: `${msg.id}:task`,
+      ChatType: chatType,
+      SenderName: senderName,
+      SenderId: msg.userId,
+      Timestamp: msg.timestamp,
+      Provider: "qq",
+      OriginatingChannel: "qq",
+      OriginatingTo: to,
+      WasMentioned: msg.atBot,
+      CommandAuthorized: true,
+    };
+    if (msg.groupId) msgCtx.GroupSubject = `QQç¼‡?${msg.groupId}`;
+
+    if (mediaPaths.length > 0) {
+      msgCtx.MediaPaths = mediaPaths;
+      msgCtx.MediaTypes = mediaPaths.map(() => "image/jpeg");
+      msgCtx.MediaPath = mediaPaths[0];
+      msgCtx.MediaType = "image/jpeg";
+    } else if (msg.imageUrls.length > 0) {
+      msgCtx.MediaUrls = msg.imageUrls;
+      msgCtx.MediaTypes = msg.imageUrls.map(() => "image/jpeg");
+      msgCtx.MediaUrl = msg.imageUrls[0];
+      msgCtx.MediaType = "image/jpeg";
+    }
+
+    const sourceOverride = ctx.modelOverrides.get(route.sessionKey);
+    if (sessionKeyOverride && sourceOverride) {
+      ctx.modelOverrides.set(sessionKeyOverride, sourceOverride);
+    }
+
+    const finalCtx = runtime.channel.reply.finalizeInboundContext(msgCtx);
+    const chunks: string[] = [];
+    const deliver = async (payload: Record<string, unknown>) => {
+      if (payload.isReasoning) return;
+      let text = payload.text as string | undefined;
+      if (!text || isSuppressedReplyText(text)) return;
+      text = sanitizeReplyText(text).trim();
+      if (!text) return;
+      chunks.push(text);
+    };
+
+    const result = runtime.channel.reply.createReplyDispatcherWithTyping({
+      deliver,
+    }) as { dispatcher: Record<string, unknown> & {
+      markComplete: () => void;
+      waitForIdle: () => Promise<void>;
+    }; replyOptions: Record<string, unknown> };
+
+    const previous = dispatchChains.get(sessionKey) ?? Promise.resolve();
+    let releaseChain!: () => void;
+    const current = new Promise<void>((resolve) => {
+      releaseChain = resolve;
+    });
+    dispatchChains.set(sessionKey, previous.then(() => current));
+    await previous;
+
+    try {
+      await runtime.channel.reply.dispatchReplyFromConfig({
+        ctx: finalCtx,
+        cfg: ocConfig,
+        dispatcher: result.dispatcher,
+        replyOptions: result.replyOptions,
+      });
+    } finally {
+      releaseChain();
+      if (dispatchChains.get(sessionKey) === current) {
+        dispatchChains.delete(sessionKey);
+      }
+      if (sessionKeyOverride && sourceOverride) {
+        ctx.modelOverrides.delete(sessionKeyOverride);
+      }
+      result.dispatcher.markComplete();
+      await result.dispatcher.waitForIdle();
+    }
+
+    const joined = chunks.join("\n").trim();
+    return joined || null;
+  };
+
+  const runSummaryClearTask = async (msg: QQMessage, identityBlock: string): Promise<SummaryClearTaskResult> => {
+    const sessionKey = resolveSessionKey(msg);
+    const sessionFile = sessionStore.getSessionFilePath(sessionKey);
+    const transcript = buildTranscriptExcerpt(sessionFile);
+    if (!transcript) {
+      return { ok: false, summary: null, reason: "当前会话没有可用于总结的历史内容" };
+    }
+
+    const isGroup = msg.messageType === "group" && !!msg.groupId;
+    if (isGroup) {
+      memoryManager.ensureGroupMemory(msg.groupId!);
+    } else {
+      memoryManager.ensureUserMemory(msg.userId, getSenderDisplayName(msg));
+    }
+
+    const targetPath = isGroup
+      ? `memory/groups/${msg.groupId}.md`
+      : `memory/users/${msg.userId}.md`;
+    const targetFilePath = isGroup
+      ? memoryManager.getGroupMemoryPath(msg.groupId!)
+      : memoryManager.getUserMemoryPath(msg.userId);
+    const beforeContent = fs.existsSync(targetFilePath) ? fs.readFileSync(targetFilePath, "utf-8") : "";
+    const tempSessionKey = `${sessionKey}:summary-clear:${Date.now()}`;
+    const prompt = buildSummaryClearPrompt({
+      transcript,
+      targetPath,
+      chatType: isGroup ? "group" : "private",
+      userId: msg.userId,
+      groupId: msg.groupId,
+    });
+
+    try {
+      const rawResult = await runAgentTaskForText(msg, prompt, identityBlock, tempSessionKey);
+      const parsed = parseSummaryClearResult(rawResult);
+      const afterContent = fs.existsSync(targetFilePath) ? fs.readFileSync(targetFilePath, "utf-8") : "";
+      if (parsed.ok && beforeContent === afterContent) {
+        return { ok: false, summary: null, reason: "AI 声称已写入记忆，但目标文件没有变化" };
+      }
+      return parsed;
+    } finally {
+      await sessionStore.removeSession(tempSessionKey);
+    }
+  };
+
   const cmdCtx: CommandContext = {
     config,
     api,
@@ -471,6 +753,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     setModelOverride: (sk, p, m) => ctx.modelOverrides.set(sk, { provider: p, model: m }),
     persistSessionModel: (sk, p, m) => sessionStore.persistSessionModel(sk, p, m),
     dispatchToAgent,
+    runAgentTaskForText,
+    runSummaryClearTask,
   };
 
   const inbound = new InboundHandler({

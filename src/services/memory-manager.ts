@@ -38,14 +38,29 @@ export class MemoryManager {
   }
 
   ensureUserMemory(userId: string, nickname: string): void {
-    const filePath = path.join(this.workspace, "memory", "users", `${userId}.md`);
+    const filePath = this.getUserMemoryPath(userId);
     if (fs.existsSync(filePath)) return;
     fs.mkdirSync(path.dirname(filePath), { recursive: true });
     fs.writeFileSync(filePath, t.memoryUserTemplate(nickname, userId));
   }
 
+  ensureGroupMemory(groupId: string): void {
+    const filePath = this.getGroupMemoryPath(groupId);
+    if (fs.existsSync(filePath)) return;
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.writeFileSync(filePath, t.memoryGroupTemplate(groupId));
+  }
+
+  getUserMemoryPath(userId: string): string {
+    return path.join(this.workspace, "memory", "users", `${userId}.md`);
+  }
+
+  getGroupMemoryPath(groupId: string): string {
+    return path.join(this.workspace, "memory", "groups", `${groupId}.md`);
+  }
+
   readUserMemory(userId: string): string {
-    const filePath = path.join(this.workspace, "memory", "users", `${userId}.md`);
+    const filePath = this.getUserMemoryPath(userId);
     try {
       return fs.readFileSync(filePath, "utf-8");
     } catch {
@@ -54,10 +69,28 @@ export class MemoryManager {
   }
 
   writeUserNote(userId: string, nickname: string, section: string, entry: string): void {
-    const filePath = path.join(this.workspace, "memory", "users", `${userId}.md`);
+    const filePath = this.getUserMemoryPath(userId);
     if (!fs.existsSync(filePath)) {
       fs.mkdirSync(path.dirname(filePath), { recursive: true });
       fs.writeFileSync(filePath, t.memoryUserTemplate(nickname, userId));
+    }
+    let content = fs.readFileSync(filePath, "utf-8");
+    const header = `## ${section}`;
+    const idx = content.indexOf(header);
+    if (idx !== -1) {
+      const insertAt = content.indexOf("\n", idx) + 1;
+      content = content.slice(0, insertAt) + entry + "\n" + content.slice(insertAt);
+    } else {
+      content += `\n${header}\n${entry}\n`;
+    }
+    fs.writeFileSync(filePath, content);
+  }
+
+  writeGroupNote(groupId: string, section: string, entry: string): void {
+    const filePath = this.getGroupMemoryPath(groupId);
+    if (!fs.existsSync(filePath)) {
+      fs.mkdirSync(path.dirname(filePath), { recursive: true });
+      fs.writeFileSync(filePath, t.memoryGroupTemplate(groupId));
     }
     let content = fs.readFileSync(filePath, "utf-8");
     const header = `## ${section}`;
