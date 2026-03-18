@@ -79,9 +79,6 @@ export class QzoneAPI {
     const d: Record<string, unknown> = { pos, num, include_image_data: includeImageData };
     if (userId) d.user_id = userId;
     if (maxPages != null) d.max_pages = maxPages;
-    // #region agent log
-    fetch('http://localhost:7243/ingest/73a4a46f-7107-4b2b-b2e9-e178389b2a24',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({location:'qzone-api.ts:getEmotionList',message:'get_emotion_list request payload',data:{include_image_data:d.include_image_data,pos:d.pos,num:d.num},timestamp:Date.now(),hypothesisId:'H1'})}).catch(()=>{});
-    // #endregion
     return this.request("get_emotion_list", d);
   }
 

@@ -5,6 +5,7 @@ import type { QQMessage } from "../napcat/types.js";
 import { MessageManager } from "../util/message-manager.js";
 import { convertPlainAtToCq, expandInlineFaces } from "../util/cq-code.js";
 import { toImageFileParam } from "../util/image-file-param.js";
+import { normalizeMarkdownForQQ } from "../util/qq-text.js";
 
 export class MessageSender {
   constructor(
@@ -20,18 +21,19 @@ export class MessageSender {
     text: string,
     mediaUrl?: string,
   ): Promise<{ status: string; data?: unknown; message?: string; retcode?: number }> {
+    const normalizedText = normalizeMarkdownForQQ(text);
     const doSend = async () => {
       if (mediaUrl) {
         const fileParam = toImageFileParam(mediaUrl, this.config.limits.imageMaxSize);
         const segments: unknown[] = [{ type: "image", data: { file: fileParam } }];
-        if (text) segments.push({ type: "text", data: { text } });
+        if (normalizedText) segments.push({ type: "text", data: { text: normalizedText } });
         return isGroup
           ? await this.api.sendGroupMsg(target, segments)
           : await this.api.sendPrivateMsg(target, segments);
       }
-      let content: string | unknown[] = text;
-      if (isGroup) content = convertPlainAtToCq(text);
-      content = expandInlineFaces(typeof content === "string" ? content : text);
+      let content: string | unknown[] = normalizedText;
+      if (isGroup) content = convertPlainAtToCq(normalizedText);
+      content = expandInlineFaces(typeof content === "string" ? content : normalizedText);
       return isGroup
         ? await this.api.sendGroupMsg(target, content)
         : await this.api.sendPrivateMsg(target, content);
@@ -54,9 +56,9 @@ export class MessageSender {
       const rMsgId = (result.data as Record<string, unknown>)?.message_id;
       if (rMsgId) {
         const sid = isGroup ? `g:${target}` : `p:${target}`;
-        this.msgManager.add(String(rMsgId), sid, text, isGroup ? "group" : "private", target);
+        this.msgManager.add(String(rMsgId), sid, normalizedText, isGroup ? "group" : "private", target);
       }
-      this.log.info(`[QQ] Reply sent to ${isGroup ? "group" : "user"} ${target}: ${text.slice(0, 60)}${text.length > 60 ? "…" : ""}`);
+      this.log.info(`[QQ] Reply sent to ${isGroup ? "group" : "user"} ${target}: ${normalizedText.slice(0, 60)}${normalizedText.length > 60 ? "…" : ""}`);
     } else {
       this.log.warn?.(`[QQ] Send failed after ${maxRetries} attempts to ${target}: ${result.message ?? result.retcode}`);
     }

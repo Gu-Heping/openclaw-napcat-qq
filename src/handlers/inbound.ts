@@ -27,11 +27,19 @@ export interface InboundDeps {
   dispatchToAgent: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
 }
 
+interface PendingPrivateMessage {
+  msg: QQMessage;
+  timer: ReturnType<typeof setTimeout>;
+  resolve: () => void;
+  done: Promise<void>;
+}
+
 export class InboundHandler {
   private recentIds = new Map<string, number>();
   private groupLastReply = new Map<string, number>();
   private lastMsgTime = new Map<string, number>();
   private turnCounts = new Map<string, number>();
+  private pendingPrivateMessages = new Map<string, PendingPrivateMessage>();
   private deps: InboundDeps;
 
   constructor(deps: InboundDeps) {
@@ -40,18 +48,96 @@ export class InboundHandler {
   }
 
   async handleMessageEvent(event: OneBotMessageEvent): Promise<void> {
-    const { config, log, sender, memoryManager, commandRegistry, cmdCtx } = this.deps;
+    const { config } = this.deps;
     const msg = parseMessageEvent(event, config.connection.selfId);
 
     if (this.isDuplicate(msg.id)) return;
-    if (this.isRateLimited(msg.userId)) return;
 
-    if (config.channelPolicy && !this.isAllowedByPolicy(msg, config.channelPolicy)) {
-      log.info?.(`[QQ] 策略拒绝: ${msg.messageType === "group" ? `群${msg.groupId}` : "私聊"} 来自 ${msg.userId}`);
+    if (this.shouldBufferPrivateMessage(msg)) {
+      await this.bufferPrivateMessage(msg);
       return;
     }
 
-    log.info?.(`[QQ] ${msg.messageType === "group" ? `群${msg.groupId}` : "私聊"} ${getSenderDisplayName(msg)}(${msg.userId}): ${msg.content.slice(0, 60)}`);
+    const buffered = await this.flushPendingPrivateMessage(msg.userId);
+    if (!buffered && this.isRateLimited(msg.userId)) return;
+
+    await this.handleParsedMessage(msg);
+  }
+
+  private shouldBufferPrivateMessage(msg: QQMessage): boolean {
+    if (msg.messageType !== "private") return false;
+    if (msg.content.trim().startsWith("/")) return false;
+    if (msg.files.length > 0 || msg.imageUrls.length > 0) return false;
+    const senderName = getSenderDisplayName(msg);
+    if (senderName === "system" || senderName === "QZone") return false;
+    return true;
+  }
+
+  private async bufferPrivateMessage(msg: QQMessage): Promise<void> {
+    const key = msg.userId;
+    const existing = this.pendingPrivateMessages.get(key);
+    if (existing) {
+      clearTimeout(existing.timer);
+      existing.msg.content = `${existing.msg.content}\n${msg.content}`.trim();
+      existing.msg.rawMessage = existing.msg.rawMessage
+        ? `${existing.msg.rawMessage}\n${msg.rawMessage || msg.content}`.trim()
+        : msg.rawMessage || msg.content;
+      existing.msg.id = msg.id;
+      existing.msg.timestamp = msg.timestamp;
+      existing.msg.sender = msg.sender;
+      existing.timer = this.createPrivateMessageTimer(key);
+      return existing.done;
+    }
+
+    let resolve!: () => void;
+    const done = new Promise<void>((r) => {
+      resolve = r;
+    });
+    this.pendingPrivateMessages.set(key, {
+      msg,
+      timer: this.createPrivateMessageTimer(key),
+      resolve,
+      done,
+    });
+    await done;
+  }
+
+  private createPrivateMessageTimer(userId: string): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      this.flushPendingPrivateMessage(userId).catch((e) => {
+        this.deps.log.warn?.(`[QQ] Flush private buffer failed for ${userId}: ${e}`);
+      });
+    }, 1500);
+  }
+
+  private async flushPendingPrivateMessage(userId: string): Promise<boolean> {
+    const pending = this.pendingPrivateMessages.get(userId);
+    if (!pending) return false;
+    this.pendingPrivateMessages.delete(userId);
+    clearTimeout(pending.timer);
+    try {
+      if (this.isRateLimited(pending.msg.userId)) return true;
+      await this.handleParsedMessage(pending.msg);
+      return true;
+    } finally {
+      pending.resolve();
+    }
+  }
+
+  private async handleParsedMessage(msg: QQMessage): Promise<void> {
+    const { config, log, sender, memoryManager, commandRegistry, cmdCtx } = this.deps;
+
+    if (config.channelPolicy && !this.isAllowedByPolicy(msg, config.channelPolicy)) {
+      log.info?.(
+        `[QQ] Policy denied ${msg.messageType === "group" ? `group ${msg.groupId}` : "private"} from ${msg.userId}`,
+      );
+      return;
+    }
+
+    log.info?.(
+      `[QQ] ${msg.messageType === "group" ? `group ${msg.groupId}` : "private"} ` +
+      `${getSenderDisplayName(msg)}(${msg.userId}): ${msg.content.slice(0, 60)}`,
+    );
 
     memoryManager.autoUpdateContextMemory(
       msg.userId,
@@ -69,7 +155,6 @@ export class InboundHandler {
       msg.content = this.cleanAtMessage(msg.content, config.connection.selfId);
     }
 
-    // 先处理指令：/ping、/help 等无论群内是否 @ 都回复，便于检查连接
     const cmdReply = commandRegistry.execute(msg, cmdCtx);
     if (cmdReply != null) {
       const reply = await cmdReply;
@@ -83,7 +168,9 @@ export class InboundHandler {
 
     try {
       this.deps.api.setInputStatus(msg.userId, 1).catch(() => {});
-    } catch { /* ignore */ }
+    } catch {
+      // ignore
+    }
 
     if (msg.files.length > 0) {
       await this.tryDownloadFiles(msg);
@@ -167,7 +254,14 @@ export class InboundHandler {
   private shouldRespondInGroup(msg: QQMessage): boolean {
     if (msg.atBot) return true;
     const content = msg.content.toLowerCase();
-    const { botNames, helpKeywords, questionPatterns, groupReplyProbInConvo, groupReplyProbRandom, groupReplyWindowMs } = this.deps.config.behavior;
+    const {
+      botNames,
+      helpKeywords,
+      questionPatterns,
+      groupReplyProbInConvo,
+      groupReplyProbRandom,
+      groupReplyWindowMs,
+    } = this.deps.config.behavior;
 
     if (botNames.some((n) => content.includes(n))) return true;
     if (helpKeywords.some((w) => content.includes(w))) return true;
@@ -175,7 +269,9 @@ export class InboundHandler {
     const isQuestion = content.length > 4 && questionPatterns.some((k) => content.includes(k));
     if (isQuestion) return true;
 
-    const inConvo = msg.groupId && Date.now() - (this.groupLastReply.get(msg.groupId) ?? 0) < groupReplyWindowMs;
+    const inConvo =
+      msg.groupId &&
+      Date.now() - (this.groupLastReply.get(msg.groupId) ?? 0) < groupReplyWindowMs;
     if (inConvo) return Math.random() < groupReplyProbInConvo;
 
     return Math.random() < groupReplyProbRandom;
@@ -198,8 +294,9 @@ export class InboundHandler {
       try {
         const result = await this.deps.api.getForwardMsg(fwdId);
         if (result.status !== "ok" || !result.data) continue;
-        const messages = (result.data as Record<string, unknown>).messages ??
-                         (result.data as Record<string, unknown>).message;
+        const messages =
+          (result.data as Record<string, unknown>).messages ??
+          (result.data as Record<string, unknown>).message;
         if (!Array.isArray(messages)) continue;
 
         const lines: string[] = [];
@@ -249,16 +346,23 @@ export class InboundHandler {
         } else if (Array.isArray(raw)) {
           const parts = (raw as Array<Record<string, unknown>>).map((seg) => {
             if (seg.type === "text") return String((seg.data as Record<string, unknown>)?.text ?? "");
-            if (seg.type === "face") return `[表情:${getFaceName(String((seg.data as Record<string, unknown>)?.id ?? ""))}]`;
+            if (seg.type === "face") {
+              return `[表情:${getFaceName(String((seg.data as Record<string, unknown>)?.id ?? ""))}]`;
+            }
             return "";
           });
           text = parts.join("").trim().slice(0, 500);
         }
-        const replacement = text ? `[引用消息内容: ${text}]` : `[引用消息: 无法获取原文 (id=${replyId})]`;
+        const replacement = text
+          ? `[引用消息内容: ${text}]`
+          : `[引用消息: 无法获取原文 (id=${replyId})]`;
         msg.content = msg.content.replace(`[回复消息:${replyId}]`, replacement);
       } catch (e) {
         this.deps.log.warn?.(`[QQ] Fetch reply ${replyId} failed: ${e}`);
-        msg.content = msg.content.replace(`[回复消息:${replyId}]`, `[引用消息: 获取失败 (id=${replyId})]`);
+        msg.content = msg.content.replace(
+          `[回复消息:${replyId}]`,
+          `[引用消息: 获取失败 (id=${replyId})]`,
+        );
       }
     }
   }
@@ -268,14 +372,18 @@ export class InboundHandler {
     const maxSize = config.limits.fileMaxSize;
 
     for (const file of msg.files) {
-      const resolved = await fileDownloader.resolveFileUrl(api, file.fileId, file.url, file.name || "未知文件");
+      const resolved = await fileDownloader.resolveFileUrl(
+        api,
+        file.fileId,
+        file.url,
+        file.name || "未知文件",
+      );
       if (resolved.url) file.url = resolved.url;
       file.name = resolved.name;
 
       if (!file.url || file.size > maxSize) continue;
 
-      const subDir = msg.messageType === "group"
-        ? `group_${msg.groupId}` : `user_${msg.userId}`;
+      const subDir = msg.messageType === "group" ? `group_${msg.groupId}` : `user_${msg.userId}`;
       const result = await fileDownloader.downloadToLocal(file.url, file.name, subDir);
 
       if (result) {

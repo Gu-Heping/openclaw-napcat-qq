@@ -1,4 +1,4 @@
-import { NapCatAPI } from "./napcat/api.js";
+﻿import { NapCatAPI } from "./napcat/api.js";
 import { NapCatClient } from "./napcat/client.js";
 import { QzoneAPI } from "./napcat/qzone-api.js";
 import { InboundHandler } from "./handlers/inbound.js";
@@ -23,7 +23,7 @@ import type { QQMessage } from "./napcat/types.js";
 import type { PluginLogger, PluginRuntime, OpenClawConfig } from "./types-compat.js";
 import { zh as t } from "./locale/zh.js";
 
-/** 若内容像内部错误（JSON 解析、API 校验、流式事件顺序等），返回友好提示，避免把堆栈/错误原文发给用户 */
+/** 鑻ュ唴瀹瑰儚鍐呴儴閿欒锛圝SON 瑙ｆ瀽銆丄PI 鏍￠獙銆佹祦寮忎簨浠堕『搴忕瓑锛夛紝杩斿洖鍙嬪ソ鎻愮ず锛岄伩鍏嶆妸鍫嗘爤/閿欒鍘熸枃鍙戠粰鐢ㄦ埛 */
 function sanitizeReplyText(text: string): string {
   if (!text || typeof text !== "string") return text;
   const s = text.trim();
@@ -42,19 +42,27 @@ function sanitizeReplyText(text: string): string {
   return text;
 }
 
-const REASONING_RE = /发一条|合适时机|不会太晚|结合\s*[^。]*兴趣|简短自然|若适合|只写\s*一条|不要解释|免打扰|上次对话已经|约?\s*\d+\s*分钟\s*前|分钟前发过/;
+const REASONING_HINTS = [
+  "思考",
+  "推理",
+  "reasoning",
+  "analysis",
+  "chain of thought",
+  "internal note",
+  "工具规划",
+];
 
 function stripProactiveReasoning(text: string): string {
   if (!text?.trim()) return text;
-  const paragraphs = text.split(/\n\n+/).map((p) => p.trim()).filter(Boolean);
-  const keep = paragraphs.filter((p) => !REASONING_RE.test(p));
-  if (!keep.length) return paragraphs[paragraphs.length - 1] || "";
-  let last = keep[keep.length - 1];
-  last = last.replace(/^(?:发一条[^。]+。|结合[^。]+。|(?:简短|自然)[^。]*。)\s*/, "").trim();
-  if (/^(发一条|结合|简短自然)/.test(last)) {
-    last = last.replace(/^[^。]+。\s*/, "").trim();
-  }
-  return last || keep[keep.length - 1];
+  const paragraphs = text
+    .split(/\n\n+/)
+    .map((p) => p.trim())
+    .filter(Boolean);
+  const keep = paragraphs.filter((paragraph) => {
+    const normalized = paragraph.toLowerCase();
+    return !REASONING_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
+  });
+  return (keep.length ? keep[keep.length - 1] : paragraphs[paragraphs.length - 1] || "").trim();
 }
 
 export interface GatewayParams {
@@ -67,10 +75,36 @@ export interface GatewayParams {
   gatewayLog?: PluginLogger;
 }
 
+type InboundSource = "chat" | "proactive" | "qzone" | "synthetic";
+type QzoneDispatchRecipient = "actor" | "owner_copy";
+
+interface QzoneSyntheticEvent {
+  type: "comment" | "like" | "post";
+  userId: string;
+  content: string;
+  nickname: string;
+  detail: string;
+  tid?: string;
+}
+
+function detectInboundSource(msg: QQMessage, body: string): InboundSource {
+  const senderName = getSenderDisplayName(msg);
+  if (senderName === "system") return "proactive";
+  if (msg.content.startsWith("[QQ") || body.includes("tid=") || senderName === "QZone") return "qzone";
+  return "chat";
+}
+
+function buildQzoneCoalesceKey(event: QzoneSyntheticEvent, recipient: QzoneDispatchRecipient): string {
+  const contentKey = event.content.replace(/\s+/g, " ").slice(0, 80);
+  return `${recipient}:${event.type}:${event.userId}:${event.tid ?? "-"}:${contentKey}`;
+}
+
 export async function startGateway(params: GatewayParams): Promise<void> {
   const { ctx, ocConfig, accountId, runtime, abortSignal, setStatus, gatewayLog } = params;
   const log = gatewayLog ?? ctx.log;
   const config = ctx.config;
+  const ownerId = Number(config.qzone.notifyUserId) || Number(config.connection.selfId || 0);
+  const selfId = Number(config.connection.selfId || 0);
 
   const api = new NapCatAPI(config.connection.httpUrl, config.connection.token, {
     timeoutMs: config.limits.apiTimeoutMs,
@@ -107,10 +141,12 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       config.qzone.accessToken || undefined,
       { timeoutMs: config.limits.apiTimeoutMs },
     );
-    log.info(`[QQ] QZone bridge enabled → ${config.qzone.bridgeUrl}`);
+    log.info(`[QQ] QZone bridge enabled 鈫?${config.qzone.bridgeUrl}`);
   }
 
   setInterval(() => crossContextCache.cleanup(), 60_000);
+  const dispatchChains = new Map<string, Promise<void>>();
+  const qzoneDispatchDedup = new Map<string, number>();
 
   for (const [sk, override] of sessionStore.loadModelOverrides()) {
     ctx.modelOverrides.set(sk, override);
@@ -150,6 +186,77 @@ export async function startGateway(params: GatewayParams): Promise<void> {
 
   ctx.resolveSessionKeyForPeer = resolveSessionKeyForPeer;
 
+  const enqueueSyntheticPrivateMessage = (
+    recipientUserId: number,
+    senderUserId: number,
+    nickname: string,
+    content: string,
+    now: number,
+  ): void => {
+    inbound.handleMessageEvent({
+      post_type: "message",
+      message_type: "private",
+      message_id: getSyntheticMessageId(),
+      user_id: recipientUserId,
+      message: [{ type: "text", data: { text: content } }],
+      raw_message: content,
+      sender: { user_id: senderUserId, nickname },
+      time: now,
+      self_id: selfId,
+    });
+  };
+
+  const shouldDispatchQzoneEvent = (event: QzoneSyntheticEvent, recipient: QzoneDispatchRecipient): boolean => {
+    const ttlMs = event.type === "like" ? 30_000 : 12_000;
+    const nowMs = Date.now();
+    const key = buildQzoneCoalesceKey(event, recipient);
+    const lastSeen = qzoneDispatchDedup.get(key) ?? 0;
+    if (nowMs - lastSeen < ttlMs) {
+      log.info?.(
+        `[QZone-Event] coalesced type=${event.type} recipient=${recipient} ` +
+        `user=${event.userId} tid=${event.tid ?? "-"} detail=${event.detail.slice(0, 60)}`,
+      );
+      return false;
+    }
+    qzoneDispatchDedup.set(key, nowMs);
+    for (const [dedupKey, seenAt] of qzoneDispatchDedup) {
+      if (nowMs - seenAt > 5 * 60_000) qzoneDispatchDedup.delete(dedupKey);
+    }
+    return true;
+  };
+
+  const handleQzoneSyntheticEvent = (event: QzoneSyntheticEvent): void => {
+    const now = Math.floor(Date.now() / 1000);
+    const actorUserId = Number(event.userId) || 0;
+    if (!actorUserId) return;
+
+    log.info?.(
+      `[QZone-Event] type=${event.type} actor=${event.userId} owner=${ownerId} tid=${event.tid ?? "-"} ` +
+      `detail=${event.detail.slice(0, 80)}`,
+    );
+    memoryManager.updateQzoneMemory(event.type, event.userId, event.nickname, event.detail, event.tid);
+
+    if (shouldDispatchQzoneEvent(event, "actor")) {
+      enqueueSyntheticPrivateMessage(
+        actorUserId,
+        actorUserId,
+        event.nickname || "QZone",
+        event.content,
+        now,
+      );
+    }
+
+    if (actorUserId !== ownerId && shouldDispatchQzoneEvent(event, "owner_copy")) {
+      enqueueSyntheticPrivateMessage(
+        ownerId,
+        ownerId,
+        "QZone",
+        event.content,
+        now,
+      );
+    }
+  };
+
   const dispatchToAgent = async (msg: QQMessage, body: string, identityBlock: string): Promise<string | null> => {
     try {
       const peer = { id: msg.userId };
@@ -166,7 +273,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const isGroup = msg.messageType === "group" && !!msg.groupId;
 
       // --- Build BodyForAgent with context supplements ---
-      const currentTimeLine = `[当前时间] ${getCurrentTimeBlock()}`;
+      const currentTimeLine = `[褰撳墠鏃堕棿] ${getCurrentTimeBlock()}`;
       let bodyForAgent: string;
       if (isGroup) {
         // Group: stable header + per-turn speaker identity + body
@@ -174,7 +281,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         const groupHeader = buildGroupHeader(msg.groupId!);
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
         const confBlock = confNote
-          ? `\n[保密参考（切勿在群内复述或透露来源）] ${confNote}`
+          ? `\n[淇濆瘑鍙傝€冿紙鍒囧嬁鍦ㄧ兢鍐呭杩版垨閫忛湶鏉ユ簮锛塢 ${confNote}`
           : "";
         bodyForAgent = `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}${confBlock}\n\n${body}`;
       } else {
@@ -182,7 +289,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         const supplement = crossContextCache.buildPrivateChatSupplement(msg.userId);
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
         const confBlock = confNote
-          ? `\n[保密参考（切勿向对方复述或透露来源）] ${confNote}`
+          ? `\n[淇濆瘑鍙傝€冿紙鍒囧嬁鍚戝鏂瑰杩版垨閫忛湶鏉ユ簮锛塢 ${confNote}`
           : "";
         const extra = [supplement, confBlock].filter(Boolean).join("\n");
         bodyForAgent = extra
@@ -211,7 +318,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         WasMentioned: msg.atBot,
         CommandAuthorized: true,
       };
-      if (msg.groupId) msgCtx.GroupSubject = `QQ群 ${msg.groupId}`;
+      if (msg.groupId) msgCtx.GroupSubject = `QQ缇?${msg.groupId}`;
 
       if (mediaPaths.length > 0) {
         msgCtx.MediaPaths = mediaPaths;
@@ -226,12 +333,20 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       }
 
       const finalCtx = runtime.channel.reply.finalizeInboundContext(msgCtx);
-      const isProactive = body.includes("[系统提示-主动对话]");
+      const source = detectInboundSource(msg, body);
+      const isProactive = source === "proactive";
+      const providerOverride = ctx.modelOverrides.get(route.sessionKey);
+      const modelLabel = providerOverride ? `${providerOverride.provider}/${providerOverride.model}` : "default";
 
+      log.info?.(
+        `[QQ] Dispatch start source=${source} session=${route.sessionKey} chatType=${chatType} ` +
+        `from=${msg.userId} target=${to} messageId=${msg.id} model=${modelLabel}`,
+      );
       const deliver = async (payload: Record<string, unknown>, _info: Record<string, unknown>) => {
+        const deliveredAt = new Date().toISOString();
         if (payload.isReasoning) return;
         let text = payload.text as string | undefined;
-        if (text && (text.includes("[无需回复]") || text.toLowerCase().includes("[no reply]") || text.includes("[不发]"))) return;
+        if (text && (text.includes("[鏃犻渶鍥炲]") || text.toLowerCase().includes("[no reply]") || text.includes("[涓嶅彂]"))) return;
         if (text && isProactive) {
           text = stripProactiveReasoning(text);
           if (!text) return;
@@ -241,6 +356,11 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         if (text || mediaUrl) {
           const outTo = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;
           const isGroup = msg.messageType === "group";
+          log.info?.(
+            `[QQ] Deliver payload at=${deliveredAt} source=${source} session=${route.sessionKey} ` +
+            `messageId=${msg.id} textLen=${text?.length ?? 0} media=${mediaUrl ? "yes" : "no"} ` +
+            `preview=${(text ?? "").replace(/\s+/g, " ").slice(0, 40)}`,
+          );
           await sender.send(outTo, isGroup, text ?? "", mediaUrl);
         }
       };
@@ -256,14 +376,34 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         api.setInputStatus(msg.userId, 1).catch(() => {});
       }, 1500);
 
+      const previous = dispatchChains.get(route.sessionKey) ?? Promise.resolve();
+      let releaseChain!: () => void;
+      const current = new Promise<void>((resolve) => {
+        releaseChain = resolve;
+      });
+      dispatchChains.set(route.sessionKey, previous.then(() => current));
+      await previous;
+
       try {
+        const replyDispatchStartedAt = new Date().toISOString();
+        log.info?.(
+          `[QQ] Reply dispatch begin at=${replyDispatchStartedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
+        );
         await runtime.channel.reply.dispatchReplyFromConfig({
           ctx: finalCtx,
           cfg: ocConfig,
           dispatcher: result.dispatcher,
           replyOptions: result.replyOptions,
         });
+        const replyDispatchFinishedAt = new Date().toISOString();
+        log.info?.(
+          `[QQ] Reply dispatch end at=${replyDispatchFinishedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
+        );
       } finally {
+        releaseChain();
+        if (dispatchChains.get(route.sessionKey) === current) {
+          dispatchChains.delete(route.sessionKey);
+        }
         clearInterval(typingInterval);
         result.dispatcher.markComplete();
         await result.dispatcher.waitForIdle();
@@ -272,7 +412,15 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       return null;
     } catch (e) {
       const errStr = String(e);
-      log.error(`[QQ] Agent dispatch error: ${errStr}`);
+      const source = detectInboundSource(msg, body);
+      const sessionKey = resolveSessionKey(msg);
+      const providerOverride = ctx.modelOverrides.get(sessionKey);
+      log.error(
+        `[QQ] Agent dispatch error source=${source} session=${sessionKey} ` +
+        `from=${msg.userId} group=${msg.groupId ?? "-"} messageId=${msg.id} ` +
+        `model=${providerOverride ? `${providerOverride.provider}/${providerOverride.model}` : "default"} ` +
+        `error=${errStr}`,
+      );
 
       let friendly: string = t.errorGeneric;
       if (errStr.includes("context_length") || errStr.includes("token")) {
@@ -348,7 +496,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         raw_message: content,
         sender: { user_id: Number(userId), nickname: "system" },
         time: Math.floor(Date.now() / 1000),
-        self_id: Number(config.connection.selfId || 0),
+        self_id: selfId,
       });
     },
   });
@@ -358,47 +506,17 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   client.addRequestHandler((event) => eventHandler.handleRequest(event));
 
   if (config.qzone.enabled && config.qzone.notifyEvents.length > 0) {
-    let qzoneSeq = Date.now();
-    const ownerId = Number(config.qzone.notifyUserId) || Number(config.connection.selfId || 0);
-    const selfId = Number(config.connection.selfId || 0);
-    const qzoneEvents = new QzoneEventListener(config.qzone, (type, userId, content, nickname, detail, tid) => {
-      log.info(`[QZone-Event] ${nickname}(${userId}): ${content.slice(0, 80)}`);
-      memoryManager.updateQzoneMemory(type, userId, nickname, detail, tid);
-      const now = Math.floor(Date.now() / 1000);
-      const numUserId = Number(userId) || 0;
-
-      // 1) 投递到评论者/点赞者会话 — bot 可以和对方互动
-      inbound.handleMessageEvent({
-        post_type: "message",
-        message_type: "private",
-        message_id: ++qzoneSeq,
-        user_id: numUserId,
-        message: [{ type: "text", data: { text: content } }],
-        raw_message: content,
-        sender: { user_id: numUserId, nickname: nickname || "QZone" },
-        time: now,
-        self_id: selfId,
-      });
-
-      // 2) 投递到主人会话 — 主人收到通知
-      if (numUserId !== ownerId) {
-        inbound.handleMessageEvent({
-          post_type: "message",
-          message_type: "private",
-          message_id: ++qzoneSeq,
-          user_id: ownerId,
-          message: [{ type: "text", data: { text: content } }],
-          raw_message: content,
-          sender: { user_id: ownerId, nickname: "QZone" },
-          time: now,
-          self_id: selfId,
-        });
-      }
-    }, log);
+    const qzoneEvents = new QzoneEventListener(
+      config.qzone,
+      (type, userId, content, nickname, detail, tid) => {
+        handleQzoneSyntheticEvent({ type, userId, content, nickname, detail, tid });
+      },
+      log,
+    );
     qzoneEvents.start(abortSignal).catch((e) => {
       log.warn?.(`[QZone-Event] Listener exited: ${e}`);
     });
-    log.info(`[QQ] QZone event listener → ${config.qzone.eventWsUrl} (events: ${config.qzone.notifyEvents.join(",")})`);
+    log.info(`[QQ] QZone event listener 鈫?${config.qzone.eventWsUrl} (events: ${config.qzone.notifyEvents.join(",")})`);
   }
 
   setStatus({ state: "connecting", label: `QQ ${config.connection.selfId}` });
@@ -408,3 +526,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   await client.start(abortSignal);
   setStatus({ state: "disconnected", label: `QQ ${config.connection.selfId}` });
 }
+
+
+
+
