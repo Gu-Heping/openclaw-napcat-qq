@@ -77,22 +77,6 @@ function isSuppressedReplyText(text: string): boolean {
   );
 }
 
-function mergePartialText(buffer: string, next: string): string {
-  if (!buffer) return next;
-  if (!next) return buffer;
-  if (next.startsWith(buffer)) return next;
-  if (buffer.endsWith(next)) return buffer;
-  return `${buffer}${next}`;
-}
-
-function shouldFlushFirstPartial(text: string): boolean {
-  const compact = text.trim();
-  if (!compact) return false;
-  if (compact.length >= 18) return true;
-  if (compact.includes("\n") && compact.length >= 8) return true;
-  return /[\u3002\uFF01\uFF1F!?\uFF1A:\uFF1B;]/.test(compact.slice(-1));
-}
-
 export interface GatewayParams {
   ctx: PluginContext;
   ocConfig: OpenClawConfig;
@@ -370,53 +354,6 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         `[QQ] Dispatch start source=${source} session=${route.sessionKey} chatType=${chatType} ` +
         `from=${msg.userId} target=${to} messageId=${msg.id} model=${modelLabel}`,
       );
-      const partialEnabled = source === "chat";
-      const partialTarget = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;
-      const partialIsGroup = msg.messageType === "group";
-      let hasVisibleReply = false;
-      let partialSentCount = 0;
-      let partialSentText = "";
-      let partialBuffer = "";
-      let partialFlushTimer: ReturnType<typeof setTimeout> | null = null;
-      const maxPartialMessages = 2;
-
-      const clearPartialFlushTimer = (): void => {
-        if (partialFlushTimer) {
-          clearTimeout(partialFlushTimer);
-          partialFlushTimer = null;
-        }
-      };
-
-      const sendVisibleReply = async (replyText: string, mediaUrl?: string): Promise<void> => {
-        hasVisibleReply = true;
-        await sender.send(partialTarget, partialIsGroup, replyText, mediaUrl);
-      };
-
-      const flushPartialReply = async (reason: "threshold" | "idle"): Promise<void> => {
-        clearPartialFlushTimer();
-        if (!partialEnabled || partialSentCount >= maxPartialMessages) return;
-        const trimmed = partialBuffer.trim();
-        partialBuffer = "";
-        if (!trimmed || isSuppressedReplyText(trimmed)) return;
-        partialSentCount += 1;
-        partialSentText += trimmed;
-        log.info?.(
-          `[QQ] Partial flush reason=${reason} source=${source} session=${route.sessionKey} ` +
-          `messageId=${msg.id} partialIndex=${partialSentCount} textLen=${trimmed.length} ` +
-          `preview=${trimmed.replace(/\s+/g, " ").slice(0, 40)}`,
-        );
-        await sendVisibleReply(trimmed);
-      };
-
-      const schedulePartialFlush = (): void => {
-        clearPartialFlushTimer();
-        partialFlushTimer = setTimeout(() => {
-          flushPartialReply("idle").catch((e) => {
-            log.warn?.(`[QQ] Partial idle flush failed for ${route.sessionKey}: ${e}`);
-          });
-        }, 700);
-      };
-
       const deliver = async (payload: Record<string, unknown>, _info: Record<string, unknown>) => {
         const deliveredAt = new Date().toISOString();
         if (payload.isReasoning) return;
@@ -434,15 +371,10 @@ export async function startGateway(params: GatewayParams): Promise<void> {
             `messageId=${msg.id} textLen=${text?.length ?? 0} media=${mediaUrl ? "yes" : "no"} ` +
             `preview=${(text ?? "").replace(/\s+/g, " ").slice(0, 40)}`,
           );
-          clearPartialFlushTimer();
-          if (text && partialSentText) {
-            const trimmed = text.trimStart();
-            if (trimmed.startsWith(partialSentText)) {
-              text = trimmed.slice(partialSentText.length).trimStart();
-            }
-          }
           if (!text && !mediaUrl) return;
-          await sendVisibleReply(text ?? "", mediaUrl);
+          const outTo = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;
+          const isGroup = msg.messageType === "group";
+          await sender.send(outTo, isGroup, text ?? "", mediaUrl);
         }
       };
 
@@ -470,44 +402,17 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         log.info?.(
           `[QQ] Reply dispatch begin at=${replyDispatchStartedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
         );
-        const replyOptions = {
-          ...result.replyOptions,
-          onAssistantMessageStart: async (...args: unknown[]) => {
-            const base = result.replyOptions.onAssistantMessageStart as ((...innerArgs: unknown[]) => unknown) | undefined;
-            await base?.(...args);
-            schedulePartialFlush();
-          },
-          onPartialReply: async (payload: Record<string, unknown>, ...args: unknown[]) => {
-            const base = result.replyOptions.onPartialReply as ((...innerArgs: unknown[]) => unknown) | undefined;
-            await base?.(payload, ...args);
-            if (!partialEnabled || partialSentCount >= maxPartialMessages) return;
-            const nextText = typeof payload.text === "string" ? sanitizeReplyText(payload.text) : "";
-            if (!nextText) return;
-            const composed = `${partialSentText}${partialBuffer}`;
-            partialBuffer = nextText.startsWith(composed)
-              ? nextText.slice(partialSentText.length)
-              : nextText.startsWith(partialSentText)
-                ? nextText.slice(partialSentText.length)
-                : mergePartialText(partialBuffer, nextText);
-            if (shouldFlushFirstPartial(partialBuffer)) {
-              await flushPartialReply("threshold");
-              return;
-            }
-            schedulePartialFlush();
-          },
-        };
         await runtime.channel.reply.dispatchReplyFromConfig({
           ctx: finalCtx,
           cfg: ocConfig,
           dispatcher: result.dispatcher,
-          replyOptions,
+          replyOptions: result.replyOptions,
         });
         const replyDispatchFinishedAt = new Date().toISOString();
         log.info?.(
           `[QQ] Reply dispatch end at=${replyDispatchFinishedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
         );
       } finally {
-        clearPartialFlushTimer();
         releaseChain();
         if (dispatchChains.get(route.sessionKey) === current) {
           dispatchChains.delete(route.sessionKey);
@@ -634,4 +539,3 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   await client.start(abortSignal);
   setStatus({ state: "disconnected", label: `QQ ${config.connection.selfId}` });
 }
-
