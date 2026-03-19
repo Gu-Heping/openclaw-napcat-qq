@@ -493,7 +493,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         WasMentioned: msg.atBot,
         CommandAuthorized: true,
       };
-      if (msg.groupId) msgCtx.GroupSubject = `QQ缇?${msg.groupId}`;
+      if (msg.groupId) msgCtx.GroupSubject = `QQ群:${msg.groupId}`;
 
       if (mediaPaths.length > 0) {
         msgCtx.MediaPaths = mediaPaths;
@@ -632,7 +632,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     const senderName = getSenderDisplayName(msg);
     const mediaPaths = await imageResolver.resolveImagePaths(msg);
     const isGroup = msg.messageType === "group" && !!msg.groupId;
-    const currentTimeLine = `[è¤°æ’³å¢ éƒå •æ£¿] ${getCurrentTimeBlock()}`;
+    const currentTimeLine = `[当前时间] ${getCurrentTimeBlock()}`;
 
     let bodyForAgent: string;
     if (isGroup) {
@@ -641,7 +641,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const profileHint = buildUserProfileHint(contactProfiles, msg.userId, msg.groupId!);
       const confNote = confidentialNotes.getNotesForUser(msg.userId);
       const confBlock = confNote
-        ? `\n[æ·‡æ¿†ç˜‘é™å‚â‚¬å†¿ç´™é’å›§å¬é¦ã„§å…¢éå‘­î˜²æ©ç‰ˆåž¨é–«å¿›æ¹¶é‰ãƒ¦ç°®é”›å¡¢ ${confNote}`
+        ? `\n[保密须知（切勿在群内提及或透露来源）] ${confNote}`
         : "";
       const extra = [continuityBlock, profileHint, confBlock].filter(Boolean).join("\n");
       bodyForAgent = extra
@@ -655,7 +655,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       ].filter(Boolean).join("\n");
       const confNote = confidentialNotes.getNotesForUser(msg.userId);
       const confBlock = confNote
-        ? `\n[æ·‡æ¿†ç˜‘é™å‚â‚¬å†¿ç´™é’å›§å¬éšæˆî‡®é‚ç‘°î˜²æ©ç‰ˆåž¨é–«å¿›æ¹¶é‰ãƒ¦ç°®é”›å¡¢ ${confNote}`
+        ? `\n[保密须知（切勿向对方提及或透露来源）] ${confNote}`
         : "";
       const extra = [supplement, confBlock].filter(Boolean).join("\n");
       bodyForAgent = extra
@@ -684,7 +684,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       WasMentioned: msg.atBot,
       CommandAuthorized: true,
     };
-    if (msg.groupId) msgCtx.GroupSubject = `QQç¼‡?${msg.groupId}`;
+    if (msg.groupId) msgCtx.GroupSubject = `QQ群:${msg.groupId}`;
 
     if (mediaPaths.length > 0) {
       msgCtx.MediaPaths = mediaPaths;
