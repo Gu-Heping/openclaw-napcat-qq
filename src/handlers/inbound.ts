@@ -9,6 +9,7 @@ import type { CommandRegistry } from "../commands/registry.js";
 import type { CommandContext } from "../commands/types.js";
 import type { CrossContextCache } from "../services/cross-context-cache.js";
 import type { ContactProfileStore } from "../services/contact-profile-store.js";
+import type { ContinuityStore } from "../services/continuity-store.js";
 import { parseMessageEvent } from "../napcat/parse.js";
 import { buildIdentityBlock, getContextSummary, getSenderDisplayName } from "../util/identity.js";
 import { getFaceName } from "../napcat/face-map.js";
@@ -25,6 +26,7 @@ export interface InboundDeps {
   cmdCtx: CommandContext;
   crossContextCache?: CrossContextCache;
   contactProfiles?: ContactProfileStore;
+  continuityStore?: ContinuityStore;
   resolveSessionKey: (msg: QQMessage) => string;
   dispatchToAgent: (msg: QQMessage, body: string, identityBlock: string) => Promise<string | null>;
 }
@@ -61,7 +63,7 @@ export class InboundHandler {
     }
 
     const buffered = await this.flushPendingPrivateMessage(msg.userId);
-    if (!buffered && this.isRateLimited(msg.userId)) return;
+    if (!buffered && this.isRateLimited(msg)) return;
 
     await this.handleParsedMessage(msg);
   }
@@ -118,7 +120,7 @@ export class InboundHandler {
     this.pendingPrivateMessages.delete(userId);
     clearTimeout(pending.timer);
     try {
-      if (this.isRateLimited(pending.msg.userId)) return true;
+      if (this.isRateLimited(pending.msg)) return true;
       await this.handleParsedMessage(pending.msg);
       return true;
     } finally {
@@ -156,6 +158,21 @@ export class InboundHandler {
     if (msg.messageType === "group" && msg.groupId && this.deps.crossContextCache) {
       this.deps.crossContextCache.push(
         msg.userId, msg.groupId, getSenderDisplayName(msg), msg.content,
+      );
+    }
+
+    if (msg.messageType === "group" && msg.groupId) {
+      this.deps.continuityStore?.recordGroupMessage(
+        msg.userId,
+        msg.groupId,
+        getSenderDisplayName(msg),
+        msg.content,
+      );
+    } else {
+      this.deps.continuityStore?.recordPrivateMessage(
+        msg.userId,
+        getSenderDisplayName(msg),
+        msg.content,
       );
     }
 
@@ -240,11 +257,19 @@ export class InboundHandler {
     return false;
   }
 
-  private isRateLimited(userId: string): boolean {
+  private getRateLimitKey(msg: QQMessage): string {
+    if (msg.messageType === "group" && msg.groupId) {
+      return `group:${msg.groupId}:user:${msg.userId}`;
+    }
+    return `private:${msg.userId}`;
+  }
+
+  private isRateLimited(msg: QQMessage): boolean {
     const now = Date.now();
-    const last = this.lastMsgTime.get(userId) ?? 0;
+    const key = this.getRateLimitKey(msg);
+    const last = this.lastMsgTime.get(key) ?? 0;
     if (now - last < this.deps.config.behavior.minIntervalMs) return true;
-    this.lastMsgTime.set(userId, now);
+    this.lastMsgTime.set(key, now);
     return false;
   }
 

@@ -14,6 +14,7 @@ import { QzoneEventListener } from "./services/qzone-event-listener.js";
 import { CrossContextCache } from "./services/cross-context-cache.js";
 import { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 import { ContactProfileStore } from "./services/contact-profile-store.js";
+import { ContinuityStore } from "./services/continuity-store.js";
 import * as fs from "node:fs";
 import { expandInlineFaces } from "./util/cq-code.js";
 import { getCurrentTimeBlock } from "./util/date.js";
@@ -105,6 +106,48 @@ interface SummaryClearTaskResult {
   ok: boolean;
   summary: string | null;
   reason?: string;
+}
+
+function buildUserProfileHint(
+  contactProfiles: ContactProfileStore,
+  userId: string,
+  currentGroupId?: string,
+): string {
+  const profile = contactProfiles.getUserProfile(userId);
+  if (!profile) return "";
+
+  const lines: string[] = [];
+  if (profile.aliases.length > 1) {
+    lines.push(`[Known aliases] ${profile.aliases.slice(0, 3).join(" / ")}`);
+  }
+
+  const groups = currentGroupId
+    ? profile.groups.filter((groupId) => groupId !== currentGroupId)
+    : profile.groups;
+  if (groups.length > 0) {
+    lines.push(`[Recent groups] ${groups.slice(0, 3).join(", ")}`);
+  }
+
+  lines.push(`[Last seen in] ${profile.lastSeenIn}`);
+  return lines.join("\n");
+}
+
+function resolveRouteForMessage(
+  runtime: PluginRuntime,
+  ocConfig: OpenClawConfig,
+  accountId: string,
+  msg: QQMessage,
+): { sessionKey: string } {
+  const isGroup = msg.messageType === "group" && !!msg.groupId;
+  const peerId = isGroup ? msg.groupId! : msg.userId;
+  const guildId = isGroup ? msg.groupId! : undefined;
+  return runtime.channel.routing.resolveAgentRoute({
+    cfg: ocConfig,
+    channel: "qq",
+    accountId,
+    peer: { id: peerId },
+    guildId,
+  });
 }
 
 function extractTextFromSessionRecord(record: Record<string, unknown>): string {
@@ -253,6 +296,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   const crossContextCache = new CrossContextCache();
   const confidentialNotes = new ConfidentialNoteStore(config, log);
   const contactProfiles = new ContactProfileStore(config.paths.workspace, log);
+  const continuityStore = new ContinuityStore(config.paths.workspace, log);
   contactProfiles.bootstrapFromMemoryFiles();
 
   ctx.api = api;
@@ -265,6 +309,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   ctx.crossContextCache = crossContextCache;
   ctx.confidentialNotes = confidentialNotes;
   ctx.contactProfiles = contactProfiles;
+  ctx.continuityStore = continuityStore;
 
   if (config.qzone.enabled) {
     ctx.qzoneApi = new QzoneAPI(
@@ -285,13 +330,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
 
   const resolveSessionKey = (msg: QQMessage): string => {
     try {
-      const route = runtime.channel.routing.resolveAgentRoute({
-        cfg: ocConfig,
-        channel: "qq",
-        accountId,
-        peer: { id: msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId },
-        guildId: msg.messageType === "group" ? msg.groupId : undefined,
-      });
+      const route = resolveRouteForMessage(runtime, ocConfig, accountId, msg);
       return route.sessionKey;
     } catch {
       const peerId = msg.messageType === "group" && msg.groupId ? msg.groupId : msg.userId;
@@ -390,11 +429,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
 
   const dispatchToAgent = async (msg: QQMessage, body: string, identityBlock: string): Promise<string | null> => {
     try {
-      const peer = { id: msg.userId };
-      const guildId = msg.groupId ?? null;
-      const route = runtime.channel.routing.resolveAgentRoute({
-        cfg: ocConfig, channel: "qq", accountId, peer, guildId,
-      });
+      const route = resolveRouteForMessage(runtime, ocConfig, accountId, msg);
 
       const chatType = msg.messageType === "group" ? "group" : "dm";
       const to = msg.messageType === "group" && msg.groupId ? `g:${msg.groupId}` : `p:${msg.userId}`;
@@ -410,14 +445,23 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         // Group: stable header + per-turn speaker identity + body
         // Body (persisted in history) stays lean; BodyForAgent (current turn) is enriched
         const groupHeader = buildGroupHeader(msg.groupId!);
+        const continuityBlock = continuityStore.buildGroupSupplement(msg.userId, msg.groupId!);
+        const profileHint = buildUserProfileHint(contactProfiles, msg.userId, msg.groupId!);
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
         const confBlock = confNote
           ? `\n[保密须知（切勿在群内提及或透露来源）] ${confNote}`
           : "";
-        bodyForAgent = `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}${confBlock}\n\n${body}`;
+        const extra = [continuityBlock, profileHint, confBlock].filter(Boolean).join("\n");
+        bodyForAgent = extra
+          ? `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n${extra}\n\n${body}`
+          : `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n\n${body}`;
       } else {
         // Private: full identity + recent group activity supplement + confidential notes
-        const supplement = crossContextCache.buildPrivateChatSupplement(msg.userId);
+        const supplement = [
+          crossContextCache.buildPrivateChatSupplement(msg.userId),
+          continuityStore.buildPrivateSupplement(msg.userId),
+          buildUserProfileHint(contactProfiles, msg.userId),
+        ].filter(Boolean).join("\n");
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
         const confBlock = confNote
           ? `\n[保密须知（切勿向对方提及或透露来源）] ${confNote}`
@@ -580,11 +624,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     identityBlock: string,
     sessionKeyOverride?: string,
   ): Promise<string | null> => {
-    const peer = { id: msg.userId };
-    const guildId = msg.groupId ?? null;
-    const route = runtime.channel.routing.resolveAgentRoute({
-      cfg: ocConfig, channel: "qq", accountId, peer, guildId,
-    });
+    const route = resolveRouteForMessage(runtime, ocConfig, accountId, msg);
     const sessionKey = sessionKeyOverride ?? route.sessionKey;
 
     const chatType = msg.messageType === "group" ? "group" : "dm";
@@ -597,13 +637,22 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     let bodyForAgent: string;
     if (isGroup) {
       const groupHeader = buildGroupHeader(msg.groupId!);
+      const continuityBlock = continuityStore.buildGroupSupplement(msg.userId, msg.groupId!);
+      const profileHint = buildUserProfileHint(contactProfiles, msg.userId, msg.groupId!);
       const confNote = confidentialNotes.getNotesForUser(msg.userId);
       const confBlock = confNote
         ? `\n[æ·‡æ¿†ç˜‘é™å‚â‚¬å†¿ç´™é’å›§å¬é¦ã„§å…¢éå‘­î˜²æ©ç‰ˆåž¨é–«å¿›æ¹¶é‰ãƒ¦ç°®é”›å¡¢ ${confNote}`
         : "";
-      bodyForAgent = `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}${confBlock}\n\n${body}`;
+      const extra = [continuityBlock, profileHint, confBlock].filter(Boolean).join("\n");
+      bodyForAgent = extra
+        ? `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n${extra}\n\n${body}`
+        : `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n\n${body}`;
     } else {
-      const supplement = crossContextCache.buildPrivateChatSupplement(msg.userId);
+      const supplement = [
+        crossContextCache.buildPrivateChatSupplement(msg.userId),
+        continuityStore.buildPrivateSupplement(msg.userId),
+        buildUserProfileHint(contactProfiles, msg.userId),
+      ].filter(Boolean).join("\n");
       const confNote = confidentialNotes.getNotesForUser(msg.userId);
       const confBlock = confNote
         ? `\n[æ·‡æ¿†ç˜‘é™å‚â‚¬å†¿ç´™é’å›§å¬éšæˆî‡®é‚ç‘°î˜²æ©ç‰ˆåž¨é–«å¿›æ¹¶é‰ãƒ¦ç°®é”›å¡¢ ${confNote}`
@@ -775,6 +824,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     cmdCtx,
     crossContextCache,
     contactProfiles,
+    continuityStore,
     resolveSessionKey,
     dispatchToAgent,
   });

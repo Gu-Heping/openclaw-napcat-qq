@@ -66,9 +66,42 @@ export class MessageSender {
     return result;
   }
 
+  private buildReplySegments(messageId: string, text: string, mediaUrl?: string): string | unknown[] {
+    const normalizedText = normalizeMarkdownForQQ(text);
+    const segments: unknown[] = [{ type: "reply", data: { id: messageId } }];
+
+    if (mediaUrl) {
+      const fileParam = toImageFileParam(mediaUrl, this.config.limits.imageMaxSize);
+      segments.push({ type: "image", data: { file: fileParam } });
+    }
+
+    if (normalizedText) {
+      const content = expandInlineFaces(convertPlainAtToCq(normalizedText));
+      if (typeof content === "string") {
+        segments.push({ type: "text", data: { text: content } });
+      } else {
+        segments.push(...content);
+      }
+    }
+
+    return segments;
+  }
+
   async sendReply(msg: QQMessage, text: string): Promise<void> {
     const isGroup = msg.messageType === "group";
     const target = isGroup && msg.groupId ? msg.groupId : msg.userId;
+    if (isGroup) {
+      const result = await this.api.sendGroupMsg(target, this.buildReplySegments(msg.id, text));
+      if (result.status === "ok") {
+        const rMsgId = (result.data as Record<string, unknown>)?.message_id;
+        if (rMsgId) {
+          this.msgManager.add(String(rMsgId), `g:${target}`, normalizeMarkdownForQQ(text), "group", target);
+        }
+      } else {
+        this.log.warn?.(`[QQ] Group reply-with-quote failed for ${target}: ${result.message ?? result.retcode}`);
+      }
+      return;
+    }
     await this.send(target, isGroup, text);
   }
 }

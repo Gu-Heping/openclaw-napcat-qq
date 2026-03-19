@@ -27,7 +27,7 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
         }
         case "at": {
           const qq = String(data.qq ?? "");
-          if (qq === botQQ || qq === "all") atBot = true;
+          if (qq === botQQ) atBot = true;
           content += `@${qq} `;
           segmentsSeen.push({ type: "at" });
           break;
