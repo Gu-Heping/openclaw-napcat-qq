@@ -99,5 +99,8 @@ export function createQQChannelPlugin(ctx, runtime) {
                 }
             },
         },
+        agentPrompt: {
+            messageToolHints: (params) => t.qqStickerMessageToolHints(params),
+        },
     };
 }

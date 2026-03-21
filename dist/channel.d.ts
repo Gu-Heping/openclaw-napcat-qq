@@ -1,6 +1,6 @@
 import type { PluginContext } from "./context.js";
 import type { NapCatPluginConfig } from "./napcat/types.js";
-import type { PluginLogger, OpenClawConfig, PluginRuntime } from "./types-compat.js";
+import type { OpenClawConfig, PluginLogger, PluginRuntime } from "./types-compat.js";
 export declare function createQQChannelPlugin(ctx: PluginContext, runtime: PluginRuntime): {
     id: "qq";
     meta: {
@@ -80,5 +80,11 @@ export declare function createQQChannelPlugin(ctx: PluginContext, runtime: Plugi
             error: string;
             data?: undefined;
         }>;
+    };
+    agentPrompt: {
+        messageToolHints: (params: {
+            cfg: OpenClawConfig;
+            accountId?: string | null;
+        }) => string[];
     };
 };

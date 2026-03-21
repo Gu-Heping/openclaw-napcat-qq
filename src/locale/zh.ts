@@ -8,15 +8,37 @@ export const zh = {
   errorTimeout: "回复超时了，请稍后再试。",
   errorReplyParse: "回复解析异常，请再发一句试试。",
 
-  // Group message prefix
-  groupMessagePrefix:
-    "[群消息] 需回复则回复，否则回复 [无需回复]。\n" +
-    "[表情包提示] 若本条消息是图片并且你判断其可能是表情包，可使用收藏相关能力；是否收藏由你自行判断。\n" +
-    "[表情包工具] 涉及表情包发送时先用 sticker_search，再用 sticker_send；解释或修订含义用 sticker_get_semantics / sticker_update_semantics / sticker_alias_add。不要只口头描述能力。\n" +
-    "[表情包约束] 不要回复“没有收藏功能/只能主人手动添加”。请基于现有工具先检索、再发送或给出澄清问题。\n\n",
-  privateMessagePrefix:
-    "[私聊消息] 正常自然回复。\n" +
-    "[表情包工具] 涉及表情包发送时先用 sticker_search，再用 sticker_send；解释或修订含义用 sticker_get_semantics / sticker_update_semantics / sticker_alias_add。不要只口头描述能力。\n\n",
+  /**
+   * 群聊行为与表情包：仅由 buildGroupHeader 注入 bodyForAgent，避免与 inbound 前缀重复，
+   * 且与「@ 机器人 / 非 @ 触发」路径一致（此前非 @ 才有 groupMessagePrefix）。
+   */
+  groupSilentReplyGuidance:
+    "[静默回复] 群聊无需发内容时，整条回复仅为以下任一即可（勿与正常句子混在同一行末）：" +
+    "[无需回复]、无需回复、[不发]、不发、no reply、[no reply]，或与 OpenClaw 全局静默标记 NO_REPLY " +
+    "（与中文系等价；NO_REPLY 由核心层拦截，不发到 QQ）。",
+  /**
+   * 用户轮一句指向系统 Messaging / Tooling；细则不再重复堆叠。
+   */
+  stickerContextBrief:
+    "[QQ 表情优先级] ① 收藏梗图库：sticker_search→sticker_send（闲聊、玩梗、吐槽、接梗时**可主动先试检索**，能对上库就发图，勿只描述不调用）；② QQ 内置表情：正文 [表情:名称]；③ Unicode emoji（😀 等）**尽量少用**。" +
+    "细则与工具说明见系统 Messaging 中 QQ 专段与 Tooling 的 sticker_*。入站不自动入库，值得收录的图用 sticker_collect。",
+
+  /** 注入 OpenClaw 系统提示「Messaging」节（messageToolHints），与 sticker_* 工具描述一致 */
+  qqStickerMessageToolHints: (_params: { cfg?: unknown; accountId?: string | null }): string[] => [
+    "QQ：表情与梗图表达优先级——① 收藏库梗图 sticker_search→sticker_send（能对上库时优先，禁止只形容不调用）；② 简短情绪用正文 [表情:名称]；③ 少用 Unicode emoji。",
+    "QQ：用户要发「收藏夹/库里的表情包、梗图」时，必须走 sticker_search(query)→sticker_send(sticker_id, user_id|group_id)；禁止只用文字形容图片而不调用工具。",
+    "QQ：仅当没有合适库图、或只需极短反应时，可只用 [表情:名称]；与发收藏夹整图（sticker_*）不同。分析任意本地图用 image 工具，不等同于发收藏表情。",
+    "QQ：入站不会自动入库。对「值得进梗图库」的图片在理解内容后调用 sticker_collect(local_image_path, collect_reason, ...)；勿收截图、证件、隐私、纯风景等。路径：BodyForAgent 的 [本地图片路径]（须与当前入站媒体栈一致），或上下文中 **QQ 官方 CDN 完整 https**（白名单域名，传入即自动下载入库）。",
+    "QQ：sticker_send 须带私聊 user_id 或群聊 group_id，通常与当前会话一致——私聊为对方 QQ（见 [身份] 或 SenderId），群聊为当前群号（见 [群聊模式] 或 GroupSubject）；sticker_search 结果末尾也会给出参数提示。",
+    "QQ：仅用收藏表情回应、不要额外打字时：sticker_send 的 text 留空；若模型仍会生成最终文字，可将该轮最终输出整段设为 NO_REPLY 或 [不发] 等静默标记（与群聊静默规则一致，勿与句子混行），网关会拦掉文字而不会撤回已发的表情图。",
+    "QQ：同轮对话中若省略 user_id/group_id，网关会按当前入站会话自动补全（仍建议显式传入）。",
+    "QQ：解释含义/改语义/加别名用 sticker_get_semantics、sticker_update_semantics、sticker_alias_add；勿回复「没有收藏功能」——应先 sticker_search。",
+  ],
+
+  /** 已并入 buildGroupHeader，保留空串以免遗漏拼接处行为变化 */
+  groupMessagePrefix: "",
+  /** 仅保留场景标签；表情包与静默规则见 buildIdentityBlock / buildGroupHeader */
+  privateMessagePrefix: "[私聊消息] 正常自然回复。\n\n",
 
   // Command: /clear
   clearSuccess: (chatType: string) =>

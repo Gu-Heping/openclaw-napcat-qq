@@ -11,7 +11,8 @@ export function createMessagingTools(ctx: PluginContext): AnyAgentTool[] {
   return [
     {
       name: "qq_send_message",
-      description: "发送 QQ 私聊消息。message 填要发给对方的正文（可含 [表情:名称]）。禁止把工具调用（如 qzone_comment(...)）或工具参数当 message 发出；回复空间评论请用 qzone_comment 工具。若对方已有会话，该条会写入对方会话历史。",
+      description:
+        "向**另一 QQ 号**主动发私聊（非当前会话默认回复路径）。当前窗口对话直接生成回复即可，勿为同一人重复调用本工具。message 为正文（可含 [表情:名称]）；禁止把工具调用（如 qzone_comment(...)）或参数当 message；空间评论请用 qzone_comment。若对方已有会话，该条会写入其会话历史。",
       parameters: {
         type: "object", required: ["user_id", "message"],
         properties: {
@@ -46,7 +47,8 @@ export function createMessagingTools(ctx: PluginContext): AnyAgentTool[] {
     },
     {
       name: "qq_send_group_message",
-      description: "发送 QQ 群聊消息。message 内可写 @QQ号 或 @all 来 @群成员，也可写 [表情:名称]。若该群已有会话，该条会写入该群会话历史，该群后续消息时 AI 可见。",
+      description:
+        "向**另一群号**主动发群消息（非当前群会话默认回复路径）。当前群对话直接生成回复即可，勿为本群同一会话重复调用。message 可含 @QQ号、@all、[表情:名称]。若目标群已有会话，该条会写入该群历史。",
       parameters: {
         type: "object", required: ["group_id", "message"],
         properties: {

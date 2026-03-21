@@ -4,6 +4,7 @@ import * as crypto from "node:crypto";
 import type { BotConfig } from "../config.js";
 import type { QQMessage } from "../napcat/types.js";
 import type { PluginLogger } from "../types-compat.js";
+import { rankStickerRecordsByQuery, usageBoostScore } from "./sticker-search-score.js";
 
 export interface StickerSemantics {
   title: string;
@@ -23,6 +24,15 @@ interface SemanticHistoryItem {
   patchSummary: string;
 }
 
+/**
+ * 收藏入库结果。内容去重依据为 **文件原始字节的 SHA256**（十六进制）；
+ * 与「同一图像的 Base64 解码后再哈希」一致，无需单独传 Base64。
+ */
+export type StickerImportFromFileResult =
+  | { kind: "created"; record: StickerRecord }
+  | { kind: "duplicate"; record: StickerRecord; contentSha256: string }
+  | { kind: "failed"; message: string };
+
 export interface StickerRecord {
   id: string;
   hash: string;
@@ -39,11 +49,33 @@ export interface StickerRecord {
   semanticHistory: SemanticHistoryItem[];
 }
 
+/** 供 JSON 与 SQLite 后端共用的存储接口 */
+export interface IStickerStore {
+  listRecent(limit?: number): StickerRecord[];
+  search(query: string, topK?: number): StickerRecord[];
+  searchWithScores(query: string, topK?: number): Array<{ record: StickerRecord; score: number }>;
+  getById(id: string): StickerRecord | null;
+  incrementUsage(id: string): void;
+  updateSemantics(id: string, patch: Partial<StickerSemantics>, reason: string, source: "auto" | "user-guided"): StickerRecord | null;
+  addAlias(id: string, alias: string): StickerRecord | null;
+  importFromFile(
+    msg: QQMessage,
+    absPath: string,
+    meta: { reason: string; source: "auto" | "user-guided"; semantics?: Partial<StickerSemantics> },
+  ): StickerImportFromFileResult;
+  collectFromInbound(msg: QQMessage, mediaPaths: string[]): Promise<number>;
+  resolveFilePath(rec: StickerRecord): string;
+  sweepOrphanFiles(): number;
+}
+
+const STICKER_INDEX_SCHEMA_VERSION = 1;
+
 interface StickerIndex {
+  schemaVersion?: number;
   records: StickerRecord[];
 }
 
-function normalizeTerms(input: unknown): string[] {
+export function normalizeTerms(input: unknown): string[] {
   if (!Array.isArray(input)) return [];
   return input
     .map((s) => String(s || "").trim())
@@ -51,7 +83,7 @@ function normalizeTerms(input: unknown): string[] {
     .slice(0, 30);
 }
 
-function ensureSemantics(raw?: Partial<StickerSemantics>): StickerSemantics {
+export function ensureSemantics(raw?: Partial<StickerSemantics>): StickerSemantics {
   return {
     title: String(raw?.title ?? "未命名表情"),
     meaning: String(raw?.meaning ?? "暂无说明"),
@@ -64,7 +96,7 @@ function ensureSemantics(raw?: Partial<StickerSemantics>): StickerSemantics {
   };
 }
 
-function summarizePatch(before: StickerSemantics, after: StickerSemantics): string {
+export function summarizePatch(before: StickerSemantics, after: StickerSemantics): string {
   const changed: string[] = [];
   if (before.title !== after.title) changed.push("title");
   if (before.meaning !== after.meaning) changed.push("meaning");
@@ -90,7 +122,7 @@ export class StickerStore {
     this.maxSemanticHistory = Math.max(5, config.stickers.maxSemanticHistory);
     fs.mkdirSync(this.filesDir, { recursive: true });
     if (!fs.existsSync(this.metaFile)) {
-      this.writeIndex({ records: [] });
+      this.writeIndex({ schemaVersion: STICKER_INDEX_SCHEMA_VERSION, records: [] });
     }
   }
 
@@ -98,16 +130,36 @@ export class StickerStore {
     try {
       const raw = fs.readFileSync(this.metaFile, "utf-8");
       const parsed = JSON.parse(raw) as StickerIndex;
-      if (!Array.isArray(parsed.records)) return { records: [] };
+      if (!Array.isArray(parsed.records)) return { schemaVersion: STICKER_INDEX_SCHEMA_VERSION, records: [] };
+      const version = parsed.schemaVersion ?? 0;
+      if (version < STICKER_INDEX_SCHEMA_VERSION) {
+        return this.migrateIndex(parsed, version);
+      }
       return parsed;
     } catch {
-      return { records: [] };
+      return { schemaVersion: STICKER_INDEX_SCHEMA_VERSION, records: [] };
     }
+  }
+
+  private migrateIndex(parsed: StickerIndex, fromVersion: number): StickerIndex {
+    let records = parsed.records;
+    if (fromVersion < 1) {
+      records = records.map((r) => ({
+        ...r,
+        semantics: ensureSemantics(r.semantics),
+        semanticHistory: Array.isArray(r.semanticHistory) ? r.semanticHistory : [],
+      }));
+    }
+    const migrated = { schemaVersion: STICKER_INDEX_SCHEMA_VERSION as number, records };
+    this.writeIndex(migrated);
+    this.log.info?.(`[QQ] Sticker index migrated schemaVersion ${fromVersion} -> ${STICKER_INDEX_SCHEMA_VERSION}`);
+    return migrated;
   }
 
   private writeIndex(index: StickerIndex): void {
     const tmp = `${this.metaFile}.tmp`;
-    fs.writeFileSync(tmp, JSON.stringify(index, null, 2));
+    const toWrite = { schemaVersion: STICKER_INDEX_SCHEMA_VERSION, records: index.records };
+    fs.writeFileSync(tmp, JSON.stringify(toWrite, null, 2));
     fs.renameSync(tmp, this.metaFile);
   }
 
@@ -147,31 +199,18 @@ export class StickerStore {
       .slice(0, Math.max(1, Math.min(50, limit)));
   }
 
-  search(query: string, topK = 5): StickerRecord[] {
+  searchWithScores(query: string, topK = 5): Array<{ record: StickerRecord; score: number }> {
+    const k = Math.max(1, Math.min(20, topK));
     const q = query.trim().toLowerCase();
-    if (!q) return this.listRecent(topK);
+    if (!q) {
+      return this.listRecent(k).map((r) => ({ record: r, score: usageBoostScore(r.usageCount) }));
+    }
     const index = this.readIndex();
-    const scored = index.records.map((r) => {
-      const hay = [
-        r.semantics.title,
-        r.semantics.meaning,
-        ...r.semantics.aliases,
-        ...r.semantics.intentTags,
-        ...r.semantics.emotionTags,
-      ].join(" ").toLowerCase();
-      let score = 0;
-      if (hay.includes(q)) score += 3;
-      for (const token of q.split(/\s+/).filter(Boolean)) {
-        if (hay.includes(token)) score += 1;
-      }
-      score += Math.min(3, Math.log10(r.usageCount + 1));
-      return { r, score };
-    });
-    return scored
-      .filter((x) => x.score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, Math.max(1, Math.min(20, topK)))
-      .map((x) => x.r);
+    return rankStickerRecordsByQuery(q, index.records, k);
+  }
+
+  search(query: string, topK = 5): StickerRecord[] {
+    return this.searchWithScores(query, topK).map((x) => x.record);
   }
 
   getById(id: string): StickerRecord | null {
@@ -232,8 +271,83 @@ export class StickerStore {
     return this.updateSemantics(id, { aliases }, "alias-add", "user-guided");
   }
 
+  /**
+   * 将本地图片文件导入收藏库（供 collectFromInbound 与 sticker_collect 复用）。
+   * @returns 新创建的记录；若已存在则 bump usage 并返回 null；出错返回 null。
+   */
+  importFromFile(
+    msg: QQMessage,
+    absPath: string,
+    meta: {
+      reason: string;
+      source: "auto" | "user-guided";
+      semantics?: Partial<StickerSemantics>;
+    },
+  ): StickerImportFromFileResult {
+    if (!this.config.stickers.enabled) return { kind: "failed", message: "sticker 功能已关闭" };
+    try {
+      if (!fs.existsSync(absPath)) return { kind: "failed", message: "文件不存在或路径无效" };
+      const buf = fs.readFileSync(absPath);
+      if (!buf.length) return { kind: "failed", message: "文件为空" };
+      if (buf.length > this.config.limits.imageMaxSize) {
+        return { kind: "failed", message: `文件超过大小限制（>${this.config.limits.imageMaxSize}）` };
+      }
+      const hash = this.hashBuffer(buf);
+      const index = this.readIndex();
+      const exists = this.findByHash(index, hash);
+      if (exists) {
+        exists.usageCount += 1;
+        exists.updatedAt = new Date().toISOString();
+        this.writeIndex(index);
+        return { kind: "duplicate", record: exists, contentSha256: hash };
+      }
+      const ext = this.detectExt(absPath);
+      const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+      const relFile = `files/${id}${ext}`;
+      const targetPath = path.join(this.rootDir, relFile);
+      fs.writeFileSync(targetPath, buf);
+      const defaultTitle = msg.stickerCandidates.find((c) => c.name)?.name || "新表情";
+      const protocolEmoji = msg.stickerCandidates.some((c) => c.protocolEmoji);
+      const sourceType = (msg.stickerCandidates[0]?.kind ?? "image") as "image" | "mface" | "marketface";
+      const now = new Date().toISOString();
+      const record: StickerRecord = {
+        id,
+        hash,
+        ext,
+        filePath: relFile,
+        createdAt: now,
+        updatedAt: now,
+        usageCount: 1,
+        sourceType,
+        sourceUserId: msg.userId,
+        sourceMessageId: msg.id,
+        protocolEmoji,
+        semantics: ensureSemantics({
+          title: defaultTitle,
+          meaning: protocolEmoji ? "来自 QQ 表情段，通常用于轻松表达情绪" : "待补充语义",
+          aliases: defaultTitle && defaultTitle !== "新表情" ? [defaultTitle] : [],
+          confidence: protocolEmoji ? 0.85 : 0.55,
+          ...meta.semantics,
+        }),
+        semanticHistory: [{
+          at: now,
+          source: meta.source,
+          reason: meta.reason,
+          patchSummary: "created",
+        }],
+      };
+      index.records.push(record);
+      this.writeIndex(index);
+      return { kind: "created", record };
+    } catch (e) {
+      this.log.warn?.(`[QQ] Sticker import failed: ${e}`);
+      return { kind: "failed", message: `入库异常: ${e}` };
+    }
+  }
+
   async collectFromInbound(msg: QQMessage, mediaPaths: string[]): Promise<number> {
     if (!this.config.stickers.enabled || mediaPaths.length === 0) return 0;
+    if (!this.config.stickers.inboundAutoCollect) return 0;
     const decision = this.scoreCandidate(msg, mediaPaths[0]);
     if (!decision.collect) {
       this.log.info?.(
@@ -241,64 +355,25 @@ export class StickerStore {
       );
       return 0;
     }
-
     const maxN = Math.max(1, this.config.stickers.maxAutoCollectPerMessage);
     const selected = mediaPaths.slice(0, maxN);
     let saved = 0;
-    const index = this.readIndex();
     for (const srcPath of selected) {
-      try {
-        if (!fs.existsSync(srcPath)) continue;
-        const buf = fs.readFileSync(srcPath);
-        if (!buf.length || buf.length > this.config.limits.imageMaxSize) continue;
-        const hash = this.hashBuffer(buf);
-        const exists = this.findByHash(index, hash);
-        if (exists) {
-          exists.usageCount += 1;
-          exists.updatedAt = new Date().toISOString();
-          continue;
-        }
-        const ext = this.detectExt(srcPath);
-        const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
-        const relFile = `files/${id}${ext}`;
-        const targetPath = path.join(this.rootDir, relFile);
-        fs.writeFileSync(targetPath, buf);
-        const title = msg.stickerCandidates.find((c) => c.name)?.name || "新表情";
-        const protocolEmoji = msg.stickerCandidates.some((c) => c.protocolEmoji);
-        const sourceType = (msg.stickerCandidates[0]?.kind ?? "image") as "image" | "mface" | "marketface";
-        const now = new Date().toISOString();
-        index.records.push({
-          id,
-          hash,
-          ext,
-          filePath: relFile,
-          createdAt: now,
-          updatedAt: now,
-          usageCount: 1,
-          sourceType,
-          sourceUserId: msg.userId,
-          sourceMessageId: msg.id,
-          protocolEmoji,
-          semantics: ensureSemantics({
-            title,
-            meaning: protocolEmoji ? "来自 QQ 表情段，通常用于轻松表达情绪" : "待补充语义",
-            aliases: title ? [title] : [],
-            confidence: protocolEmoji ? 0.85 : 0.55,
-          }),
-          semanticHistory: [{
-            at: now,
-            source: "auto",
-            reason: `auto-collect:${decision.reason}`,
-            patchSummary: "created",
-          }],
-        });
-        saved += 1;
-      } catch (e) {
-        this.log.warn?.(`[QQ] Sticker save failed: ${e}`);
-      }
+      const title = msg.stickerCandidates.find((c) => c.name)?.name || "新表情";
+      const protocolEmoji = msg.stickerCandidates.some((c) => c.protocolEmoji);
+      const outcome = this.importFromFile(msg, srcPath, {
+        reason: `auto-collect:${decision.reason}`,
+        source: "auto",
+        semantics: {
+          title,
+          meaning: protocolEmoji ? "来自 QQ 表情段，通常用于轻松表达情绪" : "待补充语义",
+          aliases: title ? [title] : [],
+          confidence: protocolEmoji ? 0.85 : 0.55,
+        },
+      });
+      if (outcome.kind === "created") saved += 1;
     }
     if (saved > 0) {
-      this.writeIndex(index);
       this.log.info(`[QQ] Sticker collected: ${saved} item(s) from message ${msg.id} reason=${decision.reason}`);
     }
     return saved;
@@ -306,5 +381,30 @@ export class StickerStore {
 
   resolveFilePath(rec: StickerRecord): string {
     return path.join(this.rootDir, rec.filePath);
+  }
+
+  /**
+   * 扫描 files/ 目录，删除 index 中不存在的孤儿文件。
+   * @returns 删除的文件数量
+   */
+  sweepOrphanFiles(): number {
+    const index = this.readIndex();
+    const knownPaths = new Set(index.records.map((r) => path.join(this.rootDir, r.filePath)));
+    let removed = 0;
+    try {
+      const entries = fs.readdirSync(this.filesDir, { withFileTypes: true });
+      for (const ent of entries) {
+        if (!ent.isFile()) continue;
+        const absPath = path.join(this.filesDir, ent.name);
+        if (!knownPaths.has(absPath)) {
+          fs.unlinkSync(absPath);
+          removed += 1;
+          this.log.info?.(`[QQ] Sticker orphan removed: ${ent.name}`);
+        }
+      }
+    } catch (e) {
+      this.log.warn?.(`[QQ] Sticker orphan sweep failed: ${e}`);
+    }
+    return removed;
   }
 }

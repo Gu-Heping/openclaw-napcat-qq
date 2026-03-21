@@ -16,19 +16,21 @@ import { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 import { ContactProfileStore } from "./services/contact-profile-store.js";
 import { ContinuityStore } from "./services/continuity-store.js";
 import { StickerStore } from "./services/sticker-store.js";
+import { createStickerStoreSqlite } from "./services/sticker-store-sqlite.js";
 import * as fs from "node:fs";
 import { expandInlineFaces } from "./util/cq-code.js";
 import { getCurrentTimeBlock } from "./util/date.js";
 import { getSenderDisplayName, buildGroupHeader } from "./util/identity.js";
 import { getSyntheticMessageId } from "./util/synthetic-id.js";
 import { isSuppressedReplyText } from "./util/reply-suppress.js";
+import { popStickerReplyTarget, pushStickerReplyTarget } from "./util/sticker-reply-context.js";
 import type { PluginContext } from "./context.js";
 import type { CommandContext } from "./commands/types.js";
 import type { QQMessage } from "./napcat/types.js";
 import type { PluginLogger, PluginRuntime, OpenClawConfig } from "./types-compat.js";
 import { zh as t } from "./locale/zh.js";
 
-/** 鑻ュ唴瀹瑰儚鍐呴儴閿欒锛圝SON 瑙ｆ瀽銆丄PI 鏍￠獙銆佹祦寮忎簨浠堕『搴忕瓑锛夛紝杩斿洖鍙嬪ソ鎻愮ず锛岄伩鍏嶆妸鍫嗘爤/閿欒鍘熸枃鍙戠粰鐢ㄦ埛 */
+/** 若整段内容像内部错误（JSON 解析、API 校验、流事件顺序等），改为返回友好提示，避免把堆栈或错误原文发给用户 */
 function sanitizeReplyText(text: string): string {
   if (!text || typeof text !== "string") return text;
   const s = text.trim();
@@ -299,7 +301,14 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   const confidentialNotes = new ConfidentialNoteStore(config, log);
   const contactProfiles = new ContactProfileStore(config.paths.workspace, log);
   const continuityStore = new ContinuityStore(config.paths.workspace, log);
-  const stickerStore = new StickerStore(config, log);
+  const stickerStore =
+    config.stickers.storageBackend === "sqlite"
+      ? (createStickerStoreSqlite(config, log) ?? (log.warn?.("[QQ] SQLite backend failed, falling back to JSON"), new StickerStore(config, log)))
+      : new StickerStore(config, log);
+  if (config.stickers.enabled) {
+    const orphanCount = stickerStore.sweepOrphanFiles();
+    if (orphanCount > 0) log.info?.(`[QQ] Sticker orphan sweep removed ${orphanCount} file(s)`);
+  }
   contactProfiles.bootstrapFromMemoryFiles();
 
   ctx.api = api;
@@ -567,6 +576,10 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       await previous;
 
       try {
+        pushStickerReplyTarget(ctx, msg);
+        ctx.inboundMediaPathsStack.push(mediaPaths);
+        ctx.inboundImageUrlsStack.push([...(msg.imageUrls ?? [])]);
+        ctx.inboundMessageRefStack.push({ userId: msg.userId, messageId: msg.id });
         const replyDispatchStartedAt = new Date().toISOString();
         log.info?.(
           `[QQ] Reply dispatch begin at=${replyDispatchStartedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
@@ -582,6 +595,10 @@ export async function startGateway(params: GatewayParams): Promise<void> {
           `[QQ] Reply dispatch end at=${replyDispatchFinishedAt} source=${source} session=${route.sessionKey} messageId=${msg.id}`,
         );
       } finally {
+        ctx.inboundMessageRefStack.pop();
+        ctx.inboundMediaPathsStack.pop();
+        ctx.inboundImageUrlsStack.pop();
+        popStickerReplyTarget(ctx);
         releaseChain();
         if (dispatchChains.get(route.sessionKey) === current) {
           dispatchChains.delete(route.sessionKey);
@@ -738,6 +755,10 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     await previous;
 
     try {
+      pushStickerReplyTarget(ctx, msg);
+      ctx.inboundMediaPathsStack.push(mediaPaths);
+      ctx.inboundImageUrlsStack.push([...(msg.imageUrls ?? [])]);
+      ctx.inboundMessageRefStack.push({ userId: msg.userId, messageId: msg.id });
       await runtime.channel.reply.dispatchReplyFromConfig({
         ctx: finalCtx,
         cfg: ocConfig,
@@ -745,6 +766,10 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         replyOptions: result.replyOptions,
       });
     } finally {
+      ctx.inboundMessageRefStack.pop();
+      ctx.inboundMediaPathsStack.pop();
+      ctx.inboundImageUrlsStack.pop();
+      popStickerReplyTarget(ctx);
       releaseChain();
       if (dispatchChains.get(sessionKey) === current) {
         dispatchChains.delete(sessionKey);

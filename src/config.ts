@@ -68,11 +68,20 @@ export interface QzoneConfig {
 
 export interface StickerConfig {
   enabled: boolean;
+  /** 入站时规则自动收藏；false 时仅 sticker_collect 可入库。默认 false。 */
+  inboundAutoCollect: boolean;
   autoCollectStickerOnly: boolean;
   autoCollectFromImage: boolean;
   privacyBlockCategories: string[];
   maxAutoCollectPerMessage: number;
   maxSemanticHistory: number;
+  /** 元数据存储后端。json=单文件 index.json；sqlite=SQLite（大库时更高效，需 Node 22+）。默认 json。 */
+  storageBackend?: "json" | "sqlite";
+  /**
+   * 仅当 storageBackend=sqlite 时生效。heuristic=全表+启发式打分；fts=FTS5 先取候选再启发式重排（大库更快）。
+   * json 后端始终为启发式。
+   */
+  searchMode?: "heuristic" | "fts";
 }
 
 /** 与 Telegram/WeCom 对齐的渠道策略，来自 openclaw.json 的 channels.qq */
@@ -168,11 +177,14 @@ const DEFAULT_NETWORK: NetworkConfig = {
 
 const DEFAULT_STICKERS: StickerConfig = {
   enabled: true,
+  inboundAutoCollect: false,
   autoCollectStickerOnly: true,
   autoCollectFromImage: false,
   privacyBlockCategories: ["screenshot", "document", "receipt", "idcard", "landscape", "group_photo"],
   maxAutoCollectPerMessage: 3,
   maxSemanticHistory: 20,
+  storageBackend: "json",
+  searchMode: "heuristic",
 };
 
 function mergeSection<T>(defaults: T, overrides: Record<string, unknown>): T {

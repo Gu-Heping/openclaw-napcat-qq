@@ -4,7 +4,7 @@ import { toImageFileParam } from "./util/image-file-param.js";
 import { startGateway } from "./gateway.js";
 import type { PluginContext } from "./context.js";
 import type { NapCatPluginConfig } from "./napcat/types.js";
-import type { PluginLogger, OpenClawConfig, PluginRuntime } from "./types-compat.js";
+import type { OpenClawConfig, PluginLogger, PluginRuntime } from "./types-compat.js";
 import { zh as t } from "./locale/zh.js";
 
 export function createQQChannelPlugin(
@@ -126,6 +126,10 @@ export function createQQChannelPlugin(
           return { ok: false, error: String(e) };
         }
       },
+    },
+    agentPrompt: {
+      messageToolHints: (params: { cfg: OpenClawConfig; accountId?: string | null }) =>
+        t.qqStickerMessageToolHints(params),
     },
   };
 }
