@@ -196,6 +196,94 @@ function extractLikeNames(data: unknown): string[] {
   return [];
 }
 
+function readBooleanParam(v: unknown): boolean {
+  if (v === true) return true;
+  if (v === false || v == null) return false;
+  const s = String(v).trim().toLowerCase();
+  return s === "1" || s === "true" || s === "yes";
+}
+
+function readBoolLoose(v: unknown): boolean {
+  if (v === true) return true;
+  if (v === false || v == null) return false;
+  if (typeof v === "string") return ["1", "true", "yes"].includes(v.toLowerCase());
+  return Boolean(v);
+}
+
+/**
+ * OpenClaw 友好：固定分隔的 `_meta`，键名与 onebot-qzone 桥接返回对齐；含可照抄的 next_call。
+ */
+function buildQzoneMetaBlock(
+  data: JsonObject | null,
+  ctx: {
+    kind: "posts" | "friend_feeds" | "post_detail";
+    self_id: string;
+    user_id?: string;
+    tid?: string;
+    offset?: number;
+    count?: number;
+    max_pages?: number;
+    cursor_used?: string;
+    bridge_ok?: boolean;
+  },
+): string {
+  const lines: string[] = ["---", "_meta"];
+  const effUser = (ctx.user_id?.trim() || ctx.self_id).trim();
+
+  if (ctx.kind === "posts") {
+    const off = ctx.offset ?? 0;
+    const cnt = ctx.count ?? 20;
+    const mp = ctx.max_pages ?? 5;
+    lines.push("kind: posts_list");
+    lines.push("tool: qzone_get_posts");
+    lines.push(`user_id: ${effUser}`);
+    lines.push(`offset: ${off}`);
+    lines.push("note: offset 与桥接 get_emotion_list 的参数 pos 同义，从 0 起");
+    lines.push(`count: ${cnt}`);
+    lines.push(`max_pages: ${mp}`);
+    if (data) {
+      lines.push(`has_more: ${readBoolLoose(data["has_more"])}`);
+      const np = data["next_pos"];
+      if (np != null && String(np).length > 0) lines.push(`next_pos: ${np}`);
+      const nc = readString(data, "next_cursor");
+      if (nc) lines.push(`next_cursor: ${nc}`);
+      const src = readString(data, "_source");
+      if (src) lines.push(`_source: ${src}`);
+      const pi = data["_page_info"];
+      if (pi && typeof pi === "object") lines.push(`_page_info: ${JSON.stringify(pi)}`);
+    }
+    if (data && readBoolLoose(data["has_more"])) {
+      const nextPos = readNumber(data, "next_pos") ?? off + extractPosts(data).length;
+      lines.push(`next_call: qzone_get_posts user_id=${effUser} offset=${nextPos} count=${cnt} max_pages=${mp}`);
+    }
+  } else if (ctx.kind === "friend_feeds") {
+    lines.push("kind: friend_feeds");
+    lines.push("tool: qzone_get_friend_feeds");
+    const cnt = ctx.count;
+    if (cnt != null && Number.isFinite(cnt)) lines.push(`count: ${cnt}`);
+    lines.push("note: cursor 须从本响应 _meta.next_cursor 原样复制，勿编造");
+    if (ctx.cursor_used != null && ctx.cursor_used !== "") lines.push(`cursor_used_len: ${ctx.cursor_used.length}`);
+    if (data) {
+      lines.push(`has_more: ${readBoolLoose(data["has_more"])}`);
+      const nc = readString(data, "next_cursor", "cursor");
+      if (nc) lines.push(`next_cursor: ${nc}`);
+      const pi = data["_page_info"];
+      if (pi && typeof pi === "object") lines.push(`_page_info: ${JSON.stringify(pi)}`);
+      if (readBoolLoose(data["has_more"]) && nc) {
+        const countPart = cnt != null && Number.isFinite(cnt) ? ` count=${Math.trunc(cnt)}` : "";
+        lines.push(`next_call: qzone_get_friend_feeds cursor=${JSON.stringify(nc)}${countPart}`);
+      }
+    }
+  } else {
+    lines.push("kind: post_detail");
+    lines.push("tool: qzone_get_post_detail");
+    lines.push(`user_id: ${ctx.user_id ?? ""}`);
+    lines.push(`tid: ${ctx.tid ?? ""}`);
+    lines.push(`bridge_ok: ${ctx.bridge_ok ?? false}`);
+  }
+  return lines.join("\n");
+}
+
 export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
   const selfId = ctx.config.connection.selfId || "unknown";
   const imageTempDir = ctx.config.paths.imageTemp;
@@ -263,14 +351,28 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     },
     {
       name: "qzone_get_posts",
-      description: "查看指定用户的空间说说列表，可返回图片 URL 和本地临时图片路径。",
+      description:
+        "拉取「指定 QQ 号的空间主页说说时间线」（自己或他人）。分页用 offset+count（offset=桥接 pos，从 0 起），与好友混排流不同。" +
+        "若要看「全好友混排最近动态」请用 qzone_get_friend_feeds（cursor 游标）。" +
+        "需要单条完整结构/转发链时用 qzone_get_post_detail。" +
+        ` 当前账号: ${selfId}。默认摘要+末尾 _meta；raw_json=true 返回整段 JSON（常含图片 base64，体积大，仅明确需要原始字段时用）。`,
       parameters: {
         type: "object",
         properties: {
-          user_id: { type: "string", description: "用户 QQ 号，默认当前账号" },
-          count: { type: "number", description: "每页数量，默认 20" },
-          offset: { type: "number", description: "起始偏移，默认 0" },
-          max_pages: { type: "number", description: "最大翻页数，默认 5" },
+          user_id: { type: "string", description: "空间主人 QQ；省略则为当前登录账号" },
+          count: { type: "number", description: "本页条数，默认 20；与桥接 num 一致" },
+          offset: {
+            type: "number",
+            description: "起始偏移，默认 0；与桥接 pos 同义。续翻用上一段 _meta.next_call 或 next_pos",
+          },
+          max_pages: {
+            type: "number",
+            description: "桥接单次请求内最多翻 feeds3 页数，默认 5；越大越完整但更慢",
+          },
+          raw_json: {
+            type: "boolean",
+            description: "为 true 时仅输出合法 JSON（ok/retcode/data），默认 false 为可读摘要+_meta",
+          },
         },
       },
       async execute(_id, params) {
@@ -280,6 +382,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const count = Number(params.count ?? 20);
         const offset = Number(params.offset ?? 0);
         const maxPages = Number(params.max_pages ?? 5);
+        const rawJson = readBooleanParam(params.raw_json);
         const res = await ctx.qzoneApi!.getEmotionList(
           userId,
           Number.isFinite(offset) ? offset : 0,
@@ -288,11 +391,71 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           true,
         );
         if (res.status !== "ok") return textResult(formatResponse(res));
+        if (rawJson) {
+          return textResult(JSON.stringify({ ok: true, retcode: res.retcode, data: res.data }, null, 2));
+        }
+        const dataObj = asObject(res.data);
+        const meta = buildQzoneMetaBlock(dataObj, {
+          kind: "posts",
+          self_id: selfId,
+          user_id: userId,
+          offset: Number.isFinite(offset) ? offset : 0,
+          count: Number.isFinite(count) ? count : 20,
+          max_pages: Number.isFinite(maxPages) ? maxPages : 5,
+        });
         const posts = extractPosts(res.data);
-        if (posts.length === 0) return textResult("没有找到说说。");
+        if (posts.length === 0) return textResult(`没有找到说说。\n\n${meta}`);
         const state = { postsWithBase64: 0 };
         const lines = posts.map((post) => summarizePost(post, userId, imageTempDir, state));
-        return textResult(`说说列表 (${posts.length} 条):\n\n${lines.join("\n\n")}`);
+        return textResult(`说说列表 (${posts.length} 条):\n\n${lines.join("\n\n")}\n\n${meta}`);
+      },
+    },
+    {
+      name: "qzone_get_post_detail",
+      description:
+        "获取单条说说的完整详情（桥接 get_msg），用于列表摘要不足时查看原文、转发、扩展字段。" +
+        "参数 user_id 为说说所属空间主人 QQ，tid 为说说 id。" +
+        ` 当前账号: ${selfId}。默认摘要+_meta；raw_json=true 返回整段 JSON（可能含大图字段）。`,
+      parameters: {
+        type: "object",
+        required: ["user_id", "tid"],
+        properties: {
+          user_id: { type: "string", description: "说说所属用户 QQ（空间主人）" },
+          tid: { type: "string", description: "说说 tid" },
+          raw_json: {
+            type: "boolean",
+            description: "为 true 时仅输出合法 JSON（ok/retcode/data）",
+          },
+        },
+      },
+      async execute(_id, params) {
+        const err = guard();
+        if (err) return textResult(err);
+        const userId = String(params.user_id ?? "");
+        const tid = String(params.tid ?? "");
+        if (!userId || !tid) return textResult("[QZone错误] 缺少 user_id 或 tid");
+        const rawJson = readBooleanParam(params.raw_json);
+        const res = await ctx.qzoneApi!.getDetail(userId, tid);
+        const ok = res.status === "ok" || res.retcode === 0;
+        const meta = buildQzoneMetaBlock(asObject(res.data), {
+          kind: "post_detail",
+          self_id: selfId,
+          user_id: userId,
+          tid,
+          bridge_ok: ok,
+        });
+        if (!ok) {
+          return textResult(`${formatResponse(res)}\n\n${meta}`);
+        }
+        if (rawJson) {
+          return textResult(JSON.stringify({ ok: true, retcode: res.retcode, data: res.data }, null, 2));
+        }
+        const detail = asObject(res.data) ?? asObject((res.data as { data?: unknown })?.data);
+        const state = { postsWithBase64: 0 };
+        const summary = detail
+          ? summarizePost(detail, userId, imageTempDir, state)
+          : "(无解析字段，请 raw_json=true)";
+        return textResult(`说说详情:\n${summary}\n\n${meta}`);
       },
     },
     {
@@ -490,28 +653,48 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     },
     {
       name: "qzone_get_friend_feeds",
-      description: "查看好友最近的空间动态，支持游标翻页。",
+      description:
+        "拉取「好友混排」最近空间动态（与指定某人主页时间线不同）。分页用 cursor：须从上一响应 _meta.next_cursor 原样复制，勿编造。" +
+        "要看某个固定 QQ 的主页说说列表请用 qzone_get_posts（offset/count）。" +
+        ` 当前账号: ${selfId}。默认摘要+_meta；raw_json=true 返回整段 JSON（可能含 base64，体积大）。`,
       parameters: {
         type: "object",
         properties: {
-          cursor: { type: "string", description: "分页游标，可选" },
-          count: { type: "number", description: "返回数量，可选" },
+          cursor: {
+            type: "string",
+            description: "上一段 _meta.next_cursor；首次调用可省略。勿手写伪造",
+          },
+          count: { type: "number", description: "本批条数，可选；与桥接 num 一致" },
+          raw_json: {
+            type: "boolean",
+            description: "为 true 时仅输出合法 JSON（ok/retcode/data），默认 false",
+          },
         },
       },
       async execute(_id, params) {
         const err = guard();
         if (err) return textResult(err);
         const cursor = params.cursor ? String(params.cursor) : undefined;
-        const count = params.count == null ? undefined : Number(params.count);
-        const res = await ctx.qzoneApi!.getFriendFeeds(cursor, Number.isFinite(count) ? count : undefined, true);
+        const countRaw = params.count == null ? undefined : Number(params.count);
+        const countArg = countRaw != null && Number.isFinite(countRaw) ? countRaw : undefined;
+        const rawJson = readBooleanParam(params.raw_json);
+        const res = await ctx.qzoneApi!.getFriendFeeds(cursor, countArg, true);
         if (res.status !== "ok") return textResult(formatResponse(res));
+        if (rawJson) {
+          return textResult(JSON.stringify({ ok: true, retcode: res.retcode, data: res.data }, null, 2));
+        }
+        const dataObj = asObject(res.data);
+        const meta = buildQzoneMetaBlock(dataObj, {
+          kind: "friend_feeds",
+          self_id: selfId,
+          cursor_used: cursor ?? "",
+          count: countArg,
+        });
         const feeds = extractFeeds(res.data);
-        if (feeds.length === 0) return textResult("没有找到好友动态。");
+        if (feeds.length === 0) return textResult(`没有找到好友动态。\n\n${meta}`);
         const state = { postsWithBase64: 0 };
         const lines = feeds.map((feed) => summarizeFeed(feed, imageTempDir, state));
-        const nextCursor = readString(asObject(res.data), "cursor", "next_cursor");
-        const cursorLine = nextCursor ? `\n\nnext_cursor=${nextCursor}` : "";
-        return textResult(`好友动态 (${feeds.length} 条):\n\n${lines.join("\n\n")}${cursorLine}`);
+        return textResult(`好友动态 (${feeds.length} 条):\n\n${lines.join("\n\n")}\n\n${meta}`);
       },
     },
     {
