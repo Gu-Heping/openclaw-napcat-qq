@@ -13,6 +13,7 @@ import type { CrossContextCache } from "./services/cross-context-cache.js";
 import type { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 import type { ContactProfileStore } from "./services/contact-profile-store.js";
 import type { ContinuityStore } from "./services/continuity-store.js";
+import type { StickerStore } from "./services/sticker-store.js";
 
 export interface PluginContext {
   readonly config: BotConfig;
@@ -34,6 +35,7 @@ export interface PluginContext {
   confidentialNotes: ConfidentialNoteStore | null;
   contactProfiles: ContactProfileStore | null;
   continuityStore: ContinuityStore | null;
+  stickerStore: StickerStore | null;
 }
 
 export function createPluginContext(config: BotConfig, log: PluginLogger): PluginContext {
@@ -54,5 +56,6 @@ export function createPluginContext(config: BotConfig, log: PluginLogger): Plugi
     confidentialNotes: null,
     contactProfiles: null,
     continuityStore: null,
+    stickerStore: null,
   };
 }

@@ -22,6 +22,7 @@ export class ProactiveManager {
   private lastProactiveGlobal = 0;
   private lastProactiveByUser = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
+  private firstTickTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: ProactiveContext) {
     this.ctx = ctx;
@@ -31,13 +32,22 @@ export class ProactiveManager {
   start(signal: AbortSignal): void {
     if (!this.ctx.config.proactive.enabled) return;
 
-    this.timer = setInterval(() => {
+    const pc = this.ctx.config.proactive;
+    const tick = () => {
       this.tryProactiveChat().catch((e) => {
         this.ctx.log.warn?.(`[QQ] Proactive error: ${e}`);
       });
-    }, this.ctx.config.proactive.checkIntervalMs);
+    };
+    const jitterMax = Math.max(0, pc.initialCheckJitterMaxMs ?? 0);
+    const firstDelay = jitterMax > 0 ? Math.floor(Math.random() * (jitterMax + 1)) : 0;
+    this.firstTickTimer = setTimeout(() => {
+      this.firstTickTimer = null;
+      tick();
+      this.timer = setInterval(tick, pc.checkIntervalMs);
+    }, firstDelay);
 
     signal.addEventListener("abort", () => {
+      if (this.firstTickTimer) clearTimeout(this.firstTickTimer);
       if (this.timer) clearInterval(this.timer);
     }, { once: true });
   }
@@ -114,6 +124,12 @@ export class ProactiveManager {
     this.lastProactiveGlobal = now;
     this.lastProactiveByUser.set(target.userId, now);
     this.ctx.log.info?.(`[QQ] Proactive: sending to ${target.userId} (${nickname || target.userId}, ${target.minutesSince}min since last msg)`);
+
+    const jitterMax = Math.max(0, pc.dispatchJitterMaxMs ?? 0);
+    if (jitterMax > 0) {
+      const waitMs = Math.floor(Math.random() * (jitterMax + 1));
+      await new Promise((r) => setTimeout(r, waitMs));
+    }
 
     try {
       await this.ctx.dispatchSynthetic(target.userId, `[系统提示-主动对话]\n${prompt}`);

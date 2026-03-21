@@ -82,6 +82,21 @@ export interface QQFileInfo {
   fileId: string;
 }
 
+export interface StickerCandidate {
+  kind: "image" | "mface" | "marketface";
+  name?: string;
+  summary?: string;
+  file?: string;
+  url?: string;
+  fileId?: string;
+  key?: string;
+  emojiId?: string;
+  emojiPackageId?: string;
+  /** Protocol-level marker: image converted from market emoji. */
+  protocolEmoji?: boolean;
+  segmentIndex: number;
+}
+
 export interface QQMessage {
   id: string;
   userId: string;
@@ -98,6 +113,8 @@ export interface QQMessage {
   imageFiles: string[];
   /** 图片段的 file_id，与 imageUrls 一一对应（NapCat 等实现常用，与 file 二选一） */
   imageFileIds: string[];
+  /** 表情包候选（含 mface/marketface 与携带 emoji 字段的 image） */
+  stickerCandidates: StickerCandidate[];
 }
 
 export interface OneBotApiResult {

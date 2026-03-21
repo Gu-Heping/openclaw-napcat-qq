@@ -7,6 +7,7 @@ import { createFileTools } from "./files.js";
 import { createRequestTools } from "./requests.js";
 import { createQzoneTools } from "./qzone.js";
 import { createConfidentialTools } from "./confidential.js";
+import { createStickerTools } from "./stickers.js";
 
 export function createAllTools(ctx: PluginContext): AnyAgentTool[] {
   const tools: AnyAgentTool[] = [
@@ -16,6 +17,7 @@ export function createAllTools(ctx: PluginContext): AnyAgentTool[] {
     ...createFileTools(ctx),
     ...createRequestTools(ctx),
     ...createConfidentialTools(ctx),
+    ...createStickerTools(ctx),
   ];
 
   if (ctx.config.qzone.enabled) {

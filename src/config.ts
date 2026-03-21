@@ -21,6 +21,10 @@ export interface ProactiveConfig {
   quietHoursStart: number;
   quietHoursEnd: number;
   pendingKeywords: string[];
+  /** Random delay 0..N ms before dispatching proactive message (reduces API burst). */
+  dispatchJitterMaxMs: number;
+  /** Random delay 0..N ms before first proactive timer tick (desync from wall-clock minute). */
+  initialCheckJitterMaxMs: number;
 }
 
 export interface LimitsConfig {
@@ -47,6 +51,7 @@ export interface PathsConfig {
   workspace: string;
   home: string;
   imageTemp: string;
+  stickerStore: string;
   sessionsDir: string;
   containerPrefixes: string[];
   textExts: string[];
@@ -59,6 +64,15 @@ export interface QzoneConfig {
   eventWsUrl: string;
   notifyUserId: string;
   notifyEvents: ("comment" | "like" | "post")[];
+}
+
+export interface StickerConfig {
+  enabled: boolean;
+  autoCollectStickerOnly: boolean;
+  autoCollectFromImage: boolean;
+  privacyBlockCategories: string[];
+  maxAutoCollectPerMessage: number;
+  maxSemanticHistory: number;
 }
 
 /** 与 Telegram/WeCom 对齐的渠道策略，来自 openclaw.json 的 channels.qq */
@@ -79,6 +93,7 @@ export interface BotConfig {
   network: NetworkConfig;
   paths: PathsConfig;
   qzone: QzoneConfig;
+  stickers: StickerConfig;
   /** 来自 channels.qq 的策略，与 Telegram/WeCom 一致 */
   channelPolicy?: ChannelPolicyConfig;
 }
@@ -103,6 +118,8 @@ const DEFAULT_PROACTIVE: ProactiveConfig = {
   quietHoursStart: 22,
   quietHoursEnd: 7,
   pendingKeywords: ["\u5F85\u529E", "\u7EA6\u5B9A", "\u8BB0\u5F97", "\u522B\u5FD8\u4E86", "\u67E5\u5B8C\u53D1"],
+  dispatchJitterMaxMs: 45_000,
+  initialCheckJitterMaxMs: 20_000,
 };
 
 export const MODEL_DISPLAY_NAMES: Record<string, string> = {
@@ -149,6 +166,15 @@ const DEFAULT_NETWORK: NetworkConfig = {
   imageFetchTimeoutMs: 15_000,
 };
 
+const DEFAULT_STICKERS: StickerConfig = {
+  enabled: true,
+  autoCollectStickerOnly: true,
+  autoCollectFromImage: false,
+  privacyBlockCategories: ["screenshot", "document", "receipt", "idcard", "landscape", "group_photo"],
+  maxAutoCollectPerMessage: 3,
+  maxSemanticHistory: 20,
+};
+
 function mergeSection<T>(defaults: T, overrides: Record<string, unknown>): T {
   const result = { ...defaults } as Record<string, unknown>;
   for (const [key, value] of Object.entries(overrides)) {
@@ -173,6 +199,7 @@ function resolvePaths(overrides?: Record<string, unknown>): PathsConfig {
     workspace,
     home,
     imageTemp: path.join(workspace, "qq_files", "images"),
+    stickerStore: path.join(workspace, "qq_files", "stickers"),
     sessionsDir: path.join(stateDir, "agents", "main", "sessions"),
     containerPrefixes: ["/app/.config/QQ/", "/root/.config/QQ/"],
     textExts: [
@@ -236,6 +263,7 @@ export function resolveConfig(
     network: mergeSection(DEFAULT_NETWORK, (c.network ?? {}) as Record<string, unknown>),
     paths: resolvePaths((c.paths ?? undefined) as Record<string, unknown> | undefined),
     qzone,
+    stickers: mergeSection(DEFAULT_STICKERS, (c.stickers ?? {}) as Record<string, unknown>),
     channelPolicy,
   };
 }

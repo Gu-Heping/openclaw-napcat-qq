@@ -9,7 +9,14 @@ export const zh = {
   errorReplyParse: "回复解析异常，请再发一句试试。",
 
   // Group message prefix
-  groupMessagePrefix: "[群消息] 需回复则回复，否则回复 [无需回复]。\n\n",
+  groupMessagePrefix:
+    "[群消息] 需回复则回复，否则回复 [无需回复]。\n" +
+    "[表情包提示] 若本条消息是图片并且你判断其可能是表情包，可使用收藏相关能力；是否收藏由你自行判断。\n" +
+    "[表情包工具] 涉及表情包发送时先用 sticker_search，再用 sticker_send；解释或修订含义用 sticker_get_semantics / sticker_update_semantics / sticker_alias_add。不要只口头描述能力。\n" +
+    "[表情包约束] 不要回复“没有收藏功能/只能主人手动添加”。请基于现有工具先检索、再发送或给出澄清问题。\n\n",
+  privateMessagePrefix:
+    "[私聊消息] 正常自然回复。\n" +
+    "[表情包工具] 涉及表情包发送时先用 sticker_search，再用 sticker_send；解释或修订含义用 sticker_get_semantics / sticker_update_semantics / sticker_alias_add。不要只口头描述能力。\n\n",
 
   // Command: /clear
   clearSuccess: (chatType: string) =>

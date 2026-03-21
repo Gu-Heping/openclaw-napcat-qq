@@ -1,4 +1,4 @@
-import type { OneBotMessageEvent, QQMessage, QQFileInfo, MessageSegment } from "./types.js";
+import type { OneBotMessageEvent, QQMessage, QQFileInfo, MessageSegment, StickerCandidate } from "./types.js";
 import { getFaceName, TEXT_LIKE_FACE_NAMES } from "./face-map.js";
 
 /**
@@ -13,6 +13,7 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
   const imageUrls: string[] = [];
   const imageFiles: string[] = [];
   const imageFileIds: string[] = [];
+  const stickerCandidates: StickerCandidate[] = [];
   const segmentsSeen: Array<{ type: string; value?: string }> = [];
 
   if (Array.isArray(message)) {
@@ -40,13 +41,50 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
           break;
         }
         case "marketface": {
-          content += `[大表情:${data.name ?? ""}]`;
+          const name = String(data.name ?? data.summary ?? "");
+          const file = String(data.file ?? data.url ?? "");
+          const fileId = String(data.file_id ?? data.fileId ?? "");
+          const key = String(data.key ?? "");
+          const emojiId = String(data.emoji_id ?? data.emojiId ?? "");
+          const emojiPackageId = String(data.emoji_package_id ?? data.emojiPackageId ?? "");
+          content += `[大表情:${name}]`;
+          stickerCandidates.push({
+            kind: "marketface",
+            name,
+            summary: String(data.summary ?? ""),
+            file: file || undefined,
+            url: String(data.url ?? "") || undefined,
+            fileId: fileId || undefined,
+            key: key || undefined,
+            emojiId: emojiId || undefined,
+            emojiPackageId: emojiPackageId || undefined,
+            protocolEmoji: true,
+            segmentIndex: segmentsSeen.length,
+          });
           segmentsSeen.push({ type: "marketface" });
           break;
         }
         case "mface": {
-          const name = data.name || data.id || "";
+          const name = String(data.name ?? data.summary ?? data.id ?? "");
+          const file = String(data.file ?? data.url ?? "");
+          const fileId = String(data.file_id ?? data.fileId ?? "");
+          const key = String(data.key ?? "");
+          const emojiId = String(data.emoji_id ?? data.emojiId ?? "");
+          const emojiPackageId = String(data.emoji_package_id ?? data.emojiPackageId ?? "");
           content += `[收藏表情:${name}]`;
+          stickerCandidates.push({
+            kind: "mface",
+            name,
+            summary: String(data.summary ?? ""),
+            file: file || undefined,
+            url: String(data.url ?? "") || undefined,
+            fileId: fileId || undefined,
+            key: key || undefined,
+            emojiId: emojiId || undefined,
+            emojiPackageId: emojiPackageId || undefined,
+            protocolEmoji: true,
+            segmentIndex: segmentsSeen.length,
+          });
           segmentsSeen.push({ type: "mface" });
           break;
         }
@@ -54,10 +92,26 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
           const url = String(data.url ?? data.file ?? "");
           const fileParam = String(data.file ?? data.filename ?? "");
           const fileId = String(data.file_id ?? data.fileId ?? "");
+          const key = String(data.key ?? "");
+          const emojiId = String(data.emoji_id ?? data.emojiId ?? "");
+          const emojiPackageId = String(data.emoji_package_id ?? data.emojiPackageId ?? "");
+          const protocolEmoji = Boolean(key || emojiId || emojiPackageId);
           content += `[图片:${url || fileParam || fileId || "?"}]`;
           imageUrls.push(url || fileParam || fileId);
           imageFiles.push(fileParam || url);
           imageFileIds.push(fileId);
+          stickerCandidates.push({
+            kind: "image",
+            summary: String(data.summary ?? ""),
+            file: fileParam || undefined,
+            url: url || undefined,
+            fileId: fileId || undefined,
+            key: key || undefined,
+            emojiId: emojiId || undefined,
+            emojiPackageId: emojiPackageId || undefined,
+            protocolEmoji,
+            segmentIndex: segmentsSeen.length,
+          });
           segmentsSeen.push({ type: "image" });
           break;
         }
@@ -123,5 +177,6 @@ export function parseMessageEvent(event: OneBotMessageEvent, botQQ: string): QQM
     imageUrls,
     imageFiles,
     imageFileIds,
+    stickerCandidates,
   };
 }

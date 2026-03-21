@@ -15,11 +15,13 @@ import { CrossContextCache } from "./services/cross-context-cache.js";
 import { ConfidentialNoteStore } from "./services/confidential-note-store.js";
 import { ContactProfileStore } from "./services/contact-profile-store.js";
 import { ContinuityStore } from "./services/continuity-store.js";
+import { StickerStore } from "./services/sticker-store.js";
 import * as fs from "node:fs";
 import { expandInlineFaces } from "./util/cq-code.js";
 import { getCurrentTimeBlock } from "./util/date.js";
 import { getSenderDisplayName, buildGroupHeader } from "./util/identity.js";
 import { getSyntheticMessageId } from "./util/synthetic-id.js";
+import { isSuppressedReplyText } from "./util/reply-suppress.js";
 import type { PluginContext } from "./context.js";
 import type { CommandContext } from "./commands/types.js";
 import type { QQMessage } from "./napcat/types.js";
@@ -66,18 +68,6 @@ function stripProactiveReasoning(text: string): string {
     return !REASONING_HINTS.some((hint) => normalized.includes(hint.toLowerCase()));
   });
   return (keep.length ? keep[keep.length - 1] : paragraphs[paragraphs.length - 1] || "").trim();
-}
-
-function isSuppressedReplyText(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return (
-    text.includes("[\u95ea\u53ea\u5a01\u5a13\u5806\u5d36\u9510\u5dee\u69fb]") ||
-    text.includes("[\u5a51\u64b3\u79f4\u8930\u4fd4]") ||
-    normalized === "[\u4e0d\u53d1]" ||
-    normalized === "\u4e0d\u53d1" ||
-    normalized === "[no reply]" ||
-    normalized === "no reply"
-  );
 }
 
 export interface GatewayParams {
@@ -270,6 +260,18 @@ function buildQzoneCoalesceKey(event: QzoneSyntheticEvent, recipient: QzoneDispa
   return `${recipient}:${event.type}:${event.userId}:${event.tid ?? "-"}:${contentKey}`;
 }
 
+function buildMediaReferenceBlock(msg: QQMessage, mediaPaths: string[]): string {
+  if (mediaPaths.length === 0 && msg.imageUrls.length === 0) return "";
+  const lines: string[] = ["[媒体引用] 若需二次确认图片内容，可直接使用以下本地路径或网络地址调用图像工具。"];
+  if (mediaPaths.length > 0) {
+    lines.push(`[本地图片路径] ${mediaPaths.join(" | ")}`);
+  }
+  if (msg.imageUrls.length > 0) {
+    lines.push(`[网络图片地址] ${msg.imageUrls.join(" | ")}`);
+  }
+  return lines.join("\n");
+}
+
 export async function startGateway(params: GatewayParams): Promise<void> {
   const { ctx, ocConfig, accountId, runtime, abortSignal, setStatus, gatewayLog } = params;
   const log = gatewayLog ?? ctx.log;
@@ -297,6 +299,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   const confidentialNotes = new ConfidentialNoteStore(config, log);
   const contactProfiles = new ContactProfileStore(config.paths.workspace, log);
   const continuityStore = new ContinuityStore(config.paths.workspace, log);
+  const stickerStore = new StickerStore(config, log);
   contactProfiles.bootstrapFromMemoryFiles();
 
   ctx.api = api;
@@ -310,6 +313,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   ctx.confidentialNotes = confidentialNotes;
   ctx.contactProfiles = contactProfiles;
   ctx.continuityStore = continuityStore;
+  ctx.stickerStore = stickerStore;
 
   if (config.qzone.enabled) {
     ctx.qzoneApi = new QzoneAPI(
@@ -435,6 +439,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const to = msg.messageType === "group" && msg.groupId ? `g:${msg.groupId}` : `p:${msg.userId}`;
       const senderName = getSenderDisplayName(msg);
       const mediaPaths = await imageResolver.resolveImagePaths(msg);
+      await stickerStore.collectFromInbound(msg, mediaPaths);
+      const mediaRefBlock = buildMediaReferenceBlock(msg, mediaPaths);
 
       const isGroup = msg.messageType === "group" && !!msg.groupId;
 
@@ -451,7 +457,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         const confBlock = confNote
           ? `\n[保密须知（切勿在群内提及或透露来源）] ${confNote}`
           : "";
-        const extra = [continuityBlock, profileHint, confBlock].filter(Boolean).join("\n");
+        const extra = [continuityBlock, profileHint, confBlock, mediaRefBlock].filter(Boolean).join("\n");
         bodyForAgent = extra
           ? `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n${extra}\n\n${body}`
           : `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n\n${body}`;
@@ -466,7 +472,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
         const confBlock = confNote
           ? `\n[保密须知（切勿向对方提及或透露来源）] ${confNote}`
           : "";
-        const extra = [supplement, confBlock].filter(Boolean).join("\n");
+        const extra = [supplement, confBlock, mediaRefBlock].filter(Boolean).join("\n");
         bodyForAgent = extra
           ? `${currentTimeLine}\n\n${identityBlock}\n${extra}\n\n${body}`
           : `${currentTimeLine}\n\n${identityBlock}\n\n${body}`;
@@ -631,6 +637,8 @@ export async function startGateway(params: GatewayParams): Promise<void> {
     const to = msg.messageType === "group" && msg.groupId ? `g:${msg.groupId}` : `p:${msg.userId}`;
     const senderName = getSenderDisplayName(msg);
     const mediaPaths = await imageResolver.resolveImagePaths(msg);
+    await stickerStore.collectFromInbound(msg, mediaPaths);
+    const mediaRefBlock = buildMediaReferenceBlock(msg, mediaPaths);
     const isGroup = msg.messageType === "group" && !!msg.groupId;
     const currentTimeLine = `[当前时间] ${getCurrentTimeBlock()}`;
 
@@ -643,7 +651,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const confBlock = confNote
         ? `\n[保密须知（切勿在群内提及或透露来源）] ${confNote}`
         : "";
-      const extra = [continuityBlock, profileHint, confBlock].filter(Boolean).join("\n");
+      const extra = [continuityBlock, profileHint, confBlock, mediaRefBlock].filter(Boolean).join("\n");
       bodyForAgent = extra
         ? `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n${extra}\n\n${body}`
         : `${currentTimeLine}\n\n${groupHeader}\n${identityBlock}\n\n${body}`;
@@ -657,7 +665,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       const confBlock = confNote
         ? `\n[保密须知（切勿向对方提及或透露来源）] ${confNote}`
         : "";
-      const extra = [supplement, confBlock].filter(Boolean).join("\n");
+      const extra = [supplement, confBlock, mediaRefBlock].filter(Boolean).join("\n");
       bodyForAgent = extra
         ? `${currentTimeLine}\n\n${identityBlock}\n${extra}\n\n${body}`
         : `${currentTimeLine}\n\n${identityBlock}\n\n${body}`;

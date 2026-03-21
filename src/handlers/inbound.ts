@@ -210,6 +210,8 @@ export class InboundHandler {
 
     if (msg.messageType === "group" && !msg.atBot) {
       body = t.groupMessagePrefix + body;
+    } else if (msg.messageType === "private") {
+      body = t.privateMessagePrefix + body;
     }
 
     await this.deps.dispatchToAgent(msg, body, identityBlock);

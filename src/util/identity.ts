@@ -24,6 +24,8 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
   lines.push(t.identityHintPrivate);
   lines.push("[回复] 只输出要发给对方的那一句话或几句话，不要输出内心独白、推理过程、「用户说…」「我应该…」「让我…」等元描述；不要向用户提及「系统」「系统问你」「主动对话」等内部流程。");
   lines.push("[QQ] 表情：少用 Unicode emoji（如 😀🎉），多用 QQ 表情，格式为 [表情:名称]（如 [表情:微笑]、[表情:狗头]、[表情:赞]）。");
+  lines.push("[表情包提示] 若本条消息是图片并且你判断其可能是表情包，可使用收藏相关能力；是否收藏由你自行判断。");
+  lines.push("[表情包工具] 发送表情包时先用 sticker_search 检索，再用 sticker_send 发送；解释含义用 sticker_get_semantics，修订含义用 sticker_update_semantics 或 sticker_alias_add。不要只口头说“可以收藏/发送”而不实际调用工具。");
 
   if (msg.content?.startsWith("[QQ空间")) {
     lines.push(`[QQ空间事件] 回复评论用 qzone_comment（tid、content、reply_comment_id、reply_uin），勿用 qq_send_message 发工具名或参数。点赞 qzone_like，查评论 qzone_get_comments。`);
@@ -45,6 +47,7 @@ export function buildGroupHeader(groupId: string): string {
     t.identityHintGroup,
     `[回复] 只输出要发给群里的消息，不要输出内心独白、推理过程等元描述。`,
     `[QQ] 表情：少用 Unicode emoji，多用 QQ 表情（格式 [表情:名称]，如 [表情:狗头]、[表情:赞]）。`,
+    `[表情包工具] 涉及表情包发送时先用 sticker_search，再用 sticker_send；解释或修订含义用 sticker_get_semantics / sticker_update_semantics / sticker_alias_add。不要只口头描述能力。`,
   ].join("\n");
 }
 

@@ -6,6 +6,7 @@ import { MessageManager } from "../util/message-manager.js";
 import { convertPlainAtToCq, expandInlineFaces } from "../util/cq-code.js";
 import { toImageFileParam } from "../util/image-file-param.js";
 import { normalizeMarkdownForQQ } from "../util/qq-text.js";
+import { isSuppressedReplyText } from "../util/reply-suppress.js";
 
 export class MessageSender {
   constructor(
@@ -21,6 +22,12 @@ export class MessageSender {
     text: string,
     mediaUrl?: string,
   ): Promise<{ status: string; data?: unknown; message?: string; retcode?: number }> {
+    if (text && isSuppressedReplyText(text)) {
+      this.log.info?.(
+        `[QQ] Reply suppressed (silent marker) to ${isGroup ? "group" : "user"} ${target}`,
+      );
+      return { status: "ok" };
+    }
     const normalizedText = normalizeMarkdownForQQ(text);
     const doSend = async () => {
       if (mediaUrl) {
@@ -88,6 +95,12 @@ export class MessageSender {
   }
 
   async sendReply(msg: QQMessage, text: string): Promise<void> {
+    if (text && isSuppressedReplyText(text)) {
+      this.log.info?.(
+        `[QQ] Reply suppressed (silent marker) messageId=${msg.id} user=${msg.userId}`,
+      );
+      return;
+    }
     const isGroup = msg.messageType === "group";
     const target = isGroup && msg.groupId ? msg.groupId : msg.userId;
     if (isGroup) {
