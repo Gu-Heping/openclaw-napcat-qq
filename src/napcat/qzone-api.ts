@@ -127,8 +127,11 @@ export class QzoneAPI {
     return this.request("send_comment", d);
   }
 
-  getCommentList(userId: string, tid: string, num = 20, pos = 0) {
-    return this.request("get_comment_list", { user_id: userId, tid, num, pos });
+  getCommentList(userId: string, tid: string, num = 20, pos = 0, fastMode?: boolean) {
+    const d: Record<string, unknown> = { user_id: userId, tid, num, pos };
+    if (fastMode === false) d.fast_mode = false;
+    else if (fastMode === true) d.fast_mode = true;
+    return this.request("get_comment_list", d);
   }
 
   deleteComment(uin: string, tid: string, commentId: string, commentUin?: string) {

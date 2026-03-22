@@ -168,11 +168,20 @@ function formatQzoneTimeForDisplay(msg: JsonObject | null): string {
   return "未知时间";
 }
 
+function extFromImageContentType(contentType: string): string {
+  const c = (contentType || "").toLowerCase();
+  if (c.includes("png")) return ".png";
+  if (c.includes("webp")) return ".webp";
+  if (c.includes("gif")) return ".gif";
+  if (c.includes("jpeg") || c.includes("jpg")) return ".jpg";
+  return ".jpg";
+}
+
 function writeBase64ImageToTemp(b64: string, contentType: string, imageTempDir: string): string | null {
   try {
     const buffer = Buffer.from(b64, "base64");
     if (buffer.length === 0) return null;
-    const ext = (contentType || "").toLowerCase().includes("png") ? ".png" : ".jpg";
+    const ext = extFromImageContentType(contentType);
     fs.mkdirSync(imageTempDir, { recursive: true });
     const outPath = path.join(imageTempDir, `qzone_${crypto.randomUUID()}${ext}`);
     fs.writeFileSync(outPath, buffer);
@@ -222,13 +231,51 @@ function summarizePost(post: JsonObject | null, fallbackUserId: string | undefin
   return lines.join("\n");
 }
 
+/** 桥接 get_comment_list 顶层的来源/分页字段，写入工具文本便于 OpenClaw 验收（原先把 JSON 摘要成纯文本时曾丢失）。 */
+function buildCommentListMetaLines(data: JsonObject | null): string[] {
+  if (!data) return [];
+  const src = readString(
+    data,
+    "commentListSource",
+    "comment_data_source",
+    "_source",
+    "source",
+  );
+  const total = readNumber(data, "commentListTotal", "feeds3_comment_total", "_feeds3_total");
+  const code = readNumber(data, "code");
+  const msg = readString(data, "message", "msg");
+  const lines: string[] = ["【评论接口元数据】"];
+  lines.push(`数据源(commentListSource/等价): ${src || "(未返回)"}`);
+  if (total != null) lines.push(`feeds3_comment_total(桶内总条数): ${total}`);
+  if (code != null) lines.push(`code: ${code}`);
+  if (msg) lines.push(`message: ${truncateForDisplay(msg, 200)}`);
+  if (typeof data["has_more"] === "boolean") lines.push(`has_more: ${data["has_more"]}`);
+  const nc = readString(data, "next_cursor", "nextCursor");
+  if (nc) lines.push(`next_cursor: ${nc}`);
+  return lines;
+}
+
 function summarizeComment(comment: JsonObject | null): string {
   const id = readString(comment, "id", "comment_id", "commentid") || "-";
   const uin = readString(comment, "uin", "user_id") || "-";
   const nickname = readString(comment, "nickname", "name") || "-";
   const time = formatQzoneTimeForDisplay(comment);
-  const content = readString(comment, "content", "text", "message") || "(空评论)";
-  return `[${time}] id=${id} user=${uin} name=${nickname}\n  ${content}`;
+  const rawContent = readString(comment, "content", "text", "message");
+  const picArr = asArray(comment?.pic)
+    .map((u) => (typeof u === "string" ? u : readString(asObject(u), "url", "src")))
+    .filter((s): s is string => Boolean(s));
+  const picN = picArr.length;
+  const picLine =
+    picN > 0
+      ? `pic_len=${picN} pic[0]=${truncateForDisplay(picArr[0]!, 140)}${picN > 1 ? ` (+${picN - 1}条)` : ""}`
+      : "pic_len=0 (桥接无图或未解析到 URL)";
+  const body =
+    rawContent.trim().length > 0
+      ? rawContent
+      : picN > 0
+        ? "(无文字，含图)"
+        : "(空评论)";
+  return `[${time}] id=${id} user=${uin} name=${nickname}\n  ${picLine}\n  ${body}`;
 }
 
 function summarizeFeed(feed: JsonObject | null, imageTempDir: string, state: { postsWithBase64: number }): string {
@@ -842,6 +889,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       name: "qzone_get_comments",
       description:
         "查看说说评论列表。桥接返回字段多为 commentlist；tid 须与该说说所属空间主人一致。" +
+        " 文本首段含【评论接口元数据】（commentListSource、feeds3_comment_total 等）；每条含 pic_len。" +
+        " raw_json=true 时返回桥接 data 完整 JSON（仅调试，体积可能很大）。" +
         ` 当前账号: ${selfId}；省略 user_id 时按当前登录号请求（与桥接默认一致）。`,
       parameters: {
         type: "object",
@@ -851,6 +900,11 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           tid: { type: "string", description: "说说 tid" },
           count: { type: "number", description: "数量，默认 20" },
           offset: { type: "number", description: "偏移，默认 0" },
+          fast_mode: {
+            type: "boolean",
+            description: "与桥接一致；false 时对应 fast_mode=false（更完整抓取/日志，略慢）。默认不传则桥接多为 fast",
+          },
+          raw_json: { type: "boolean", description: "true 时直接输出桥接 data 的 JSON（含 commentlist 全字段）" },
         },
       },
       async execute(_id, params) {
@@ -861,11 +915,31 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         if (!tid) return textResult("[QZone错误] 缺少 tid");
         const count = Number(params.count ?? 20);
         const offset = Number(params.offset ?? 0);
-        const res = await ctx.qzoneApi!.getCommentList(userId, tid, Number.isFinite(count) ? count : 20, Number.isFinite(offset) ? offset : 0);
+        const fastExplicit = params.fast_mode;
+        const fastMode = fastExplicit === false ? false : fastExplicit === true ? true : undefined;
+        const res = await ctx.qzoneApi!.getCommentList(
+          userId,
+          tid,
+          Number.isFinite(count) ? count : 20,
+          Number.isFinite(offset) ? offset : 0,
+          fastMode,
+        );
         if (res.status !== "ok") return textResult(formatResponse(res));
+        const dataObj = asObject(res.data);
+        if (readBooleanParam(params.raw_json)) {
+          const raw = JSON.stringify(res.data, null, 2);
+          const max = 120_000;
+          const jsonBlock = raw.length > max ? `${raw.slice(0, max)}\n…(truncated ${raw.length - max} chars)` : raw;
+          return textResult(`${buildCommentListMetaLines(dataObj).join("\n")}\n\n【raw_json】\n${jsonBlock}`);
+        }
         const comments = extractComments(res.data);
-        if (comments.length === 0) return textResult("没有找到评论。");
-        return textResult(`评论列表 (${comments.length} 条):\n\n${comments.map((comment) => summarizeComment(comment)).join("\n\n")}`);
+        const meta = buildCommentListMetaLines(dataObj).join("\n");
+        if (comments.length === 0) {
+          return textResult(`${meta}\n\n没有找到评论（commentlist 为空）。`);
+        }
+        return textResult(
+          `${meta}\n\n评论列表 (本页 ${comments.length} 条):\n\n${comments.map((comment) => summarizeComment(comment)).join("\n\n")}`,
+        );
       },
     },
     {
@@ -1128,6 +1202,48 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const albumId = params.album_id ? String(params.album_id) : undefined;
         const res = await ctx.qzoneApi!.uploadImage(image, albumId);
         return textResult(formatResponse(res));
+      },
+    },
+    {
+      name: "qzone_fetch_image",
+      description:
+        "用空间桥接**已登录 Cookie** 拉取 QZone CDN 图片（qpic.cn、photo.store.qq.com 等白名单），保存到临时文件并返回路径。" +
+        "「get_comments」里的 pic URL 在**普通浏览器地址栏**常 403/404（缺 Cookie、Referer 或 URL 被截断）；要预览请用本工具传入**完整** url。",
+      parameters: {
+        type: "object",
+        required: ["url"],
+        properties: {
+          url: {
+            type: "string",
+            description: "完整图片 URL，须与接口返回一致（含 &bo= &t= 等查询串，勿省略）",
+          },
+        },
+      },
+      async execute(_id, params) {
+        const err = guard();
+        if (err) return textResult(err);
+        const url = String(params.url ?? "").trim();
+        if (!url) return textResult("[QZone错误] 缺少 url");
+        if (!/^https?:\/\//i.test(url)) return textResult("[QZone错误] url 须为 http(s) 完整链接");
+        const res = await ctx.qzoneApi!.fetchImage(url);
+        if (res.status !== "ok" || res.data == null) return textResult(formatResponse(res));
+        const d = asObject(res.data as unknown);
+        const b64 = readString(d, "base64");
+        const ct = readString(d, "content_type", "contentType") || "image/jpeg";
+        if (!b64) {
+          return textResult(`[QZone错误] fetch_image 未返回 base64，data=${truncateForDisplay(JSON.stringify(res.data), 400)}`);
+        }
+        const imageTempDir = ctx.config.paths.imageTemp;
+        const localPath = writeBase64ImageToTemp(b64, ct, imageTempDir);
+        if (!localPath) return textResult("[QZone错误] 写入临时文件失败");
+        return textResult(
+          [
+            "已用桥接登录态拉取并落盘（聊天里复制的短链接或截断 URL 会失败，请用 raw_json 里完整 pic 串）。",
+            `本地路径: ${localPath}`,
+            `content_type: ${ct}`,
+            "可在支持文件路径的环境用 image 工具打开上述路径。",
+          ].join("\n"),
+        );
       },
     },
     {

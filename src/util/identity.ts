@@ -29,7 +29,9 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
   lines.push(t.stickerContextBrief);
 
   if (msg.content?.startsWith("[QQ空间")) {
-    lines.push(`[QQ空间事件] 回复评论用 qzone_comment（tid、content、reply_comment_id、reply_uin），勿用 qq_send_message 发工具名或参数。点赞 qzone_like，查评论 qzone_get_comments。`);
+    lines.push(
+      `[QQ空间事件] 回复评论用 qzone_comment（tid、content、reply_comment_id、reply_uin），勿用 qq_send_message 发工具名或参数。点赞 qzone_like，查评论 qzone_get_comments。评论里 qpic 链接勿在浏览器裸开，预览用 qzone_fetch_image(url=完整URL)。`,
+    );
   }
 
   return lines.join("\n");
