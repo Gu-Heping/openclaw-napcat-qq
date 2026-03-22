@@ -3,11 +3,10 @@ import { createPluginContext } from "./context.js";
 import { createQQChannelPlugin } from "./channel.js";
 import { createAllTools } from "./tools/index.js";
 import { CommandRegistry } from "./commands/registry.js";
-import { helpCommand, pingCommand } from "./commands/help.js";
-import { clearCommand, summaryClearCommand, modelCommand } from "./commands/session.js";
+import { pingCommand, qqHelpZhCommand } from "./commands/help.js";
+import { clearCommand, summaryClearCommand } from "./commands/session.js";
 import { noteCommand } from "./commands/note.js";
 import { historyCommand, clearHistoryCommand } from "./commands/history.js";
-import { statusCommand } from "./commands/status.js";
 const plugin = {
     id: "napcat-qq",
     name: "napcat-qq",
@@ -22,24 +21,28 @@ const plugin = {
         const ctx = createPluginContext(config, log);
         const registry = new CommandRegistry();
         registry.registerAll([
-            helpCommand,
+            qqHelpZhCommand,
             pingCommand,
             clearCommand,
             summaryClearCommand,
-            modelCommand,
             noteCommand,
             historyCommand,
             clearHistoryCommand,
-            statusCommand,
         ]);
         ctx.commandRegistry = registry;
         api.registerHook("before_model_resolve", (...args) => {
             const hookCtx = (args[1] ?? args[0] ?? {});
-            const sk = String(hookCtx.sessionKey ?? "");
-            const override = ctx.modelOverrides.get(sk);
-            if (override) {
-                return { modelOverride: override.model, providerOverride: override.provider };
+            const sk = String(hookCtx.sessionKey ?? "").trim();
+            if (!sk || !ctx.sessionStore) {
+                return undefined;
             }
+            const fromDisk = ctx.sessionStore.readModelOverrideForKey(sk);
+            if (fromDisk) {
+                ctx.modelOverrides.set(sk, fromDisk);
+                return { modelOverride: fromDisk.model, providerOverride: fromDisk.provider };
+            }
+            ctx.modelOverrides.delete(sk);
+            return undefined;
         }, { name: "napcat-qq:before_model_resolve" });
         const qqChannel = createQQChannelPlugin(ctx, runtime);
         api.registerChannel({ plugin: qqChannel });
@@ -47,7 +50,7 @@ const plugin = {
         for (const tool of tools) {
             api.registerTool(tool, { name: tool.name });
         }
-        log.info(`[napcat-qq] v2.0.0 registered: QQ channel + ${tools.length} tools + ${registry["commands"].length} commands`);
+        log.info(`[napcat-qq] v2.0.0 registered: QQ channel + ${tools.length} tools + ${registry.registeredCommandCount} QQ-local slash commands`);
     },
 };
 export default plugin;

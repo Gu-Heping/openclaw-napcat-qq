@@ -112,6 +112,28 @@ export class SessionStore {
     return result;
   }
 
+  /** Single-key read so OpenClaw-native /model updates apply without restarting gateway. */
+  readModelOverrideForKey(sessionKey: string): { provider: string; model: string } | null {
+    try {
+      if (!fs.existsSync(this.sessionsPath)) return null;
+      const store = JSON.parse(fs.readFileSync(this.sessionsPath, "utf-8")) as Record<
+        string,
+        Record<string, unknown>
+      >;
+      const entry = store[sessionKey];
+      if (!entry || typeof entry !== "object") return null;
+      const provider = entry.providerOverride;
+      const model = entry.modelOverride;
+      if (typeof provider === "string" && provider.trim() && typeof model === "string" && model.trim()) {
+        return { provider: provider.trim(), model: model.trim() };
+      }
+      return null;
+    } catch (e) {
+      this.log.warn?.(`[QQ] readModelOverrideForKey error: ${e}`);
+      return null;
+    }
+  }
+
   hasSession(sessionKey: string): boolean {
     try {
       if (!fs.existsSync(this.sessionsPath)) return false;

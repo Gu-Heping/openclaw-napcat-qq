@@ -75,10 +75,18 @@ export class QzoneAPI {
 
   // ── 说说 CRUD ──
   /** 获取说说列表；includeImageData 为 true 时桥接会在每条说说的图片中附带 base64（默认 true，与 onebot-qzone 6fee393+ 一致） */
-  getEmotionList(userId?: string, pos = 0, num = 20, maxPages?: number, includeImageData = true) {
+  getEmotionList(
+    userId?: string,
+    pos = 0,
+    num = 20,
+    maxPages?: number,
+    includeImageData = true,
+    cursor?: string,
+  ) {
     const d: Record<string, unknown> = { pos, num, include_image_data: includeImageData };
     if (userId) d.user_id = userId;
     if (maxPages != null) d.max_pages = maxPages;
+    if (cursor != null && String(cursor).trim() !== "") d.cursor = String(cursor).trim();
     return this.request("get_emotion_list", d);
   }
 

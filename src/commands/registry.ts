@@ -5,6 +5,10 @@ export class CommandRegistry {
   private commands: Command[] = [];
   private nameIndex = new Map<string, Command>();
 
+  get registeredCommandCount(): number {
+    return this.commands.length;
+  }
+
   register(command: Command): void {
     this.commands.push(command);
     for (const name of command.names) {

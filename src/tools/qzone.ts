@@ -18,6 +18,14 @@ const SIMPLE_QZONE_EMOJIS: Record<string, string> = {
   no: "e188",
 };
 
+/** 多条 qzone_* 工具共用：用户不必说底层接口名，由 Agent 选型或两轮合并回答。 */
+const QZONE_FEED_ROUTING =
+  "【路由】说说时间线→qzone_get_posts；本人空间混合动态（说说/分享/音乐等）→qzone_get_space_html_act_feed 或 qzone_get_user_act_feed；好友圈混排→qzone_get_friend_feeds。泛问「空间最近发了啥」可先混合流再补说说列表并合并结论。";
+
+/** qzone_get_posts / get_emotion_list（feeds3）分页说明。 */
+const QZONE_POSTS_PAGINATION =
+  "【说说翻页】同一缓冲内用 offset；若 _meta/_page_info 提示 next_page_uses_cursor 或 next_pos≥full_fetched_len 且返回了 next_cursor，续页须 cursor=上一段 next_cursor 原样且 offset=0，勿只递增 offset。优先照抄 _meta.next_call。勿与 ic2 的 start/count 或好友混排的 cursor 交叉续翻。";
+
 /** 与 onebot-qzone feeds3/ic2 解析一致，供 OpenClaw 区分动态形态（非过滤条件） */
 const QZONE_APPID_CATEGORY_ZH: Record<string, string> = {
   "311": "说说",
@@ -97,9 +105,10 @@ function summarizeActFeedItem(
   fallbackUserId: string | undefined,
   imageTempDir: string,
   state: { postsWithBase64: number },
+  loginUin?: string,
 ): string {
   const hints = buildOpenClawActFeedCategoryLines(post);
-  const body = summarizePost(post, fallbackUserId, imageTempDir, state);
+  const body = summarizePost(post, fallbackUserId, imageTempDir, state, loginUin ? { loginUin } : undefined);
   return hints.length > 0 ? `${hints.join("\n")}\n${body}` : body;
 }
 
@@ -191,9 +200,20 @@ function writeBase64ImageToTemp(b64: string, contentType: string, imageTempDir: 
   }
 }
 
-function summarizePost(post: JsonObject | null, fallbackUserId: string | undefined, imageTempDir: string, state: { postsWithBase64: number }): string {
+function summarizePost(
+  post: JsonObject | null,
+  fallbackUserId: string | undefined,
+  imageTempDir: string,
+  state: { postsWithBase64: number },
+  authorOpts?: { loginUin?: string },
+): string {
   const tid = readString(post, "tid", "message_id", "id") || "-";
   const uin = readString(post, "uin", "user_id", "owner_uin") || fallbackUserId || "-";
+  const nickname = readString(post, "nickname", "name", "nick", "user_name");
+  const loginUin = authorOpts?.loginUin?.trim() ?? "";
+  const isLoginAuthor = Boolean(loginUin && uin === loginUin);
+  const nickSeg = nickname ? ` nick=${truncateForDisplay(nickname, 48)}` : "";
+  const selfSeg = isLoginAuthor ? " [当前登录号发表]" : "";
   const time = formatQzoneTimeForDisplay(post);
   const text = readString(post, "content", "message", "text", "summary") || "(无正文)";
   const commentCount = readNumber(post, "cmtnum", "commentnum", "comment_count") ?? 0;
@@ -203,7 +223,7 @@ function summarizePost(post: JsonObject | null, fallbackUserId: string | undefin
     .map((item) => readString(asObject(item), "url", "pic_url", "origin_url"))
     .filter(Boolean);
 
-  const lines = [`[${time}] tid=${tid} user=${uin} 评论=${commentCount} 点赞=${likeCount}`, `  ${text}`];
+  const lines = [`[${time}] tid=${tid} user=${uin}${nickSeg} 评论=${commentCount} 点赞=${likeCount}${selfSeg}`, `  ${text}`];
   if (picUrls.length > 0) {
     lines.push(`  图片URL: ${picUrls.join(" | ")}`);
   }
@@ -278,9 +298,14 @@ function summarizeComment(comment: JsonObject | null): string {
   return `[${time}] id=${id} user=${uin} name=${nickname}\n  ${picLine}\n  ${body}`;
 }
 
-function summarizeFeed(feed: JsonObject | null, imageTempDir: string, state: { postsWithBase64: number }): string {
+function summarizeFeed(
+  feed: JsonObject | null,
+  imageTempDir: string,
+  state: { postsWithBase64: number },
+  loginUin?: string,
+): string {
   const userId = readString(feed, "uin", "user_id", "owner_uin");
-  return summarizePost(feed, userId, imageTempDir, state);
+  return summarizePost(feed, userId, imageTempDir, state, loginUin ? { loginUin } : undefined);
 }
 
 function extractPosts(data: unknown): JsonObject[] {
@@ -390,6 +415,7 @@ function buildQzoneMetaBlock(
     lines.push("note: offset 与桥接 get_emotion_list 的参数 pos 同义，从 0 起");
     lines.push(`count: ${cnt}`);
     lines.push(`max_pages: ${mp}`);
+    let pageInfoObj: JsonObject | null = null;
     if (data) {
       lines.push(`has_more: ${readBoolLoose(data["has_more"])}`);
       const np = data["next_pos"];
@@ -399,18 +425,36 @@ function buildQzoneMetaBlock(
       const src = readString(data, "_source");
       if (src) lines.push(`_source: ${src}`);
       const pi = data["_page_info"];
-      if (pi && typeof pi === "object") lines.push(`_page_info: ${JSON.stringify(pi)}`);
+      if (pi && typeof pi === "object") {
+        pageInfoObj = pi as JsonObject;
+        lines.push(`_page_info: ${JSON.stringify(pi)}`);
+      }
     }
     if (data && readBoolLoose(data["has_more"])) {
-      const nextPos = readNumber(data, "next_pos") ?? off + extractPosts(data).length;
-      lines.push(`next_call: qzone_get_posts user_id=${effUser} offset=${nextPos} count=${cnt} max_pages=${mp}`);
+      const nc = readString(data, "next_cursor");
+      const np = readNumber(data, "next_pos");
+      const fullFetched = pageInfoObj ? readNumber(pageInfoObj, "full_fetched_len") : undefined;
+      const nextPageUsesCursor = readBoolLoose(pageInfoObj?.["next_page_uses_cursor"]);
+      const needCursor =
+        Boolean(nc) &&
+        (nextPageUsesCursor || (fullFetched != null && np != null && np >= fullFetched));
+      if (needCursor && nc) {
+        lines.push(`next_call: qzone_get_posts user_id=${effUser} cursor=${JSON.stringify(nc)} offset=0 count=${cnt} max_pages=${mp}`);
+        lines.push("note: 续页须带 cursor（上一段 next_cursor 原样），offset 用 0；勿在仅 1 条缓冲时递增 offset");
+      } else {
+        const nextPos = np ?? off + extractPosts(data).length;
+        lines.push(`next_call: qzone_get_posts user_id=${effUser} offset=${nextPos} count=${cnt} max_pages=${mp}`);
+      }
     }
   } else if (ctx.kind === "friend_feeds") {
     lines.push("kind: friend_feeds");
     lines.push("tool: qzone_get_friend_feeds");
     const cnt = ctx.count;
     if (cnt != null && Number.isFinite(cnt)) lines.push(`count: ${cnt}`);
-    lines.push("note: cursor 须从本响应 _meta.next_cursor 原样复制，勿编造");
+    lines.push(`login_uin: ${ctx.self_id}`);
+    lines.push(
+      "note: cursor 须从本响应 _meta.next_cursor 原样复制，勿编造。摘要里 user= 为动态作者 QQ，nick= 为解析到的昵称（可能为空）。user 与 login_uin 相同表示当前登录号发表，勿与私聊对话用户混称「你」。",
+    );
     if (ctx.cursor_used != null && ctx.cursor_used !== "") lines.push(`cursor_used_len: ${ctx.cursor_used.length}`);
     if (data) {
       lines.push(`has_more: ${readBoolLoose(data["has_more"])}`);
@@ -562,10 +606,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     {
       name: "qzone_get_posts",
       description:
-        "拉取「指定 QQ 号的空间主页说说时间线」（自己或他人）。分页用 offset+count（offset=桥接 pos，从 0 起），与好友混排流不同。" +
-        "用户问「我的/自己的说说或动态」时**必须**用本工具（省略 user_id 即当前号），**禁止**用 qzone_get_friend_feeds 再筛本人——好友混排里自己的条目极少，会表现为只有一两条。" +
-        "若要看「全好友混排最近动态」请用 qzone_get_friend_feeds（cursor 游标）。" +
-        "需要单条完整结构/转发链时用 qzone_get_post_detail。" +
+        `${QZONE_FEED_ROUTING} 本工具拉取空间主页「纯说说」时间线（桥 get_emotion_list / feeds3），自己或他人均可。用户问「我的/自己的说说」**必须**用本工具（省略 user_id），**禁止**仅靠 qzone_get_friend_feeds 筛本人（混排里本人条目极稀疏）。${QZONE_POSTS_PAGINATION} 单条结构/转发链用 qzone_get_post_detail。全好友混排用 qzone_get_friend_feeds。` +
         ` 当前账号: ${selfId}。默认摘要+末尾 _meta；raw_json=true 返回整段 JSON（常含图片 base64，体积大，仅明确需要原始字段时用）。`,
       parameters: {
         type: "object",
@@ -574,7 +615,13 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           count: { type: "number", description: "本页条数，默认 20；与桥接 num 一致" },
           offset: {
             type: "number",
-            description: "起始偏移，默认 0；与桥接 pos 同义。续翻用上一段 _meta.next_call 或 next_pos",
+            description:
+              "起始偏移，默认 0；与桥接 pos 同义。用 cursor 续翻时一般为 0。续翻优先照抄 _meta.next_call",
+          },
+          cursor: {
+            type: "string",
+            description:
+              "feeds3 续页游标：从上一响应 _meta.next_cursor 原样复制；与好友动态 qzone_get_friend_feeds 的 cursor 不同源。首次调用省略",
           },
           max_pages: {
             type: "number",
@@ -593,6 +640,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const count = Number(params.count ?? 20);
         const offset = Number(params.offset ?? 0);
         const maxPages = Number(params.max_pages ?? 5);
+        const cursor = readString(asObject(params), "cursor")?.trim() || undefined;
         const rawJson = readBooleanParam(params.raw_json);
         const res = await ctx.qzoneApi!.getEmotionList(
           userId,
@@ -600,6 +648,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
           Number.isFinite(count) ? count : 20,
           Number.isFinite(maxPages) ? maxPages : 5,
           true,
+          cursor,
         );
         if (res.status !== "ok") return textResult(formatResponse(res));
         if (rawJson) {
@@ -617,17 +666,15 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const posts = extractPosts(res.data);
         if (posts.length === 0) return textResult(`没有找到说说。\n\n${meta}`);
         const state = { postsWithBase64: 0 };
-        const lines = posts.map((post) => summarizePost(post, userId, imageTempDir, state));
+        const lines = posts.map((post) => summarizePost(post, userId, imageTempDir, state, { loginUin: selfId }));
         return textResult(`说说列表 (${posts.length} 条):\n\n${lines.join("\n\n")}\n\n${meta}`);
       },
     },
     {
       name: "qzone_get_user_act_feed",
       description:
-        "按 **QQ 号** 拉取 ic2 **feeds_html_act_all** 动态流（**说说、分享、音乐等混合**，不按类型拆分）。**all_pages=true** 时由桥接自动多页合并（tid 去重），用于「尽量拉全」；仍受 **max_rounds** 与腾讯接口限制。" +
-        "看本人混合动态时 **qq** 填当前号（与 `qzone_get_posts` 纯说说列表互补）；勿用好友混排代替。" +
-        "单页模式为一次 HTTP 请求；与 **qzone_get_posts**（feeds3 纯说说 offset）**不等价**，**start/count 勿与 offset 混续翻**。" +
-        ` 当前登录: ${selfId}。默认不拉图；raw_json=true 返回整段 JSON。人类可读摘要中每条含【类别】等标签便于区分形态；要原始字段用 raw_json。`,
+        `${QZONE_FEED_ROUTING} 本工具按 qq 拉 ic2 feeds_html_act_all：**混合动态**（说说、分享、音乐等），与 qzone_get_posts 的纯说说列表互补。分页只用 start/count（及 _meta.next_call），**勿**与 qzone_get_posts 的 offset/cursor 混续翻。all_pages=true 时桥接多页合并（tid 去重），受 max_rounds 等限制。看本人动态时 qq 填当前号；勿用好友混排代替本人主页。` +
+        ` 当前登录: ${selfId}。默认不拉图；raw_json=true 返回整段 JSON。摘要每条含【类别】等标签；要原始字段用 raw_json。`,
       parameters: {
         type: "object",
         required: ["qq"],
@@ -699,7 +746,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const posts = extractPosts(res.data);
         if (posts.length === 0) return textResult(`没有解析到动态（可能无权限或 HTML 不兼容）。\n\n${meta}`);
         const state = { postsWithBase64: 0 };
-        const lines = posts.map((post) => summarizeActFeedItem(post, qq, imageTempDir, state));
+        const lines = posts.map((post) => summarizeActFeedItem(post, qq, imageTempDir, state, selfId));
         const pi = dataObj != null ? dataObj["_page_info"] : undefined;
         const merged =
           pi && typeof pi === "object" && !Array.isArray(pi) && readBoolLoose((pi as JsonObject)["all_pages"]);
@@ -710,10 +757,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     {
       name: "qzone_get_space_html_act_feed",
       description:
-        "ic2 **feeds_html_act_all**：**混合动态流**（说说、分享等），**不按类型过滤**。**all_pages=true** 时桥接多页合并；主人由 **host_uin**（hostuin）决定，**user_id** 仅为 URL 语境 uin。" +
-        "用户要看「本人空间混合动态」时可用本工具（默认 hostuin 已是当前号）；**不要**用好友混排流代替。" +
-        "与 **qzone_get_posts**（feeds3 说说 offset）**不等价**；**start/count 勿与 offset 混续翻**。" +
-        ` 当前登录: ${selfId}；省略 host_uin 时 hostuin=${selfId}。默认不拉图；raw_json=true 返回整段 JSON。摘要含【类别】等标签区分说说/分享/转发层等。`,
+        `${QZONE_FEED_ROUTING} 本工具：ic2 feeds_html_act_all **混合动态**（说说、分享等）。host_uin=动态主人，user_id 仅页面语境 uin。分页 start/count + _meta.next_call，**勿**与 qzone_get_posts 的 offset/cursor 混续翻。all_pages=true 时多页合并。本人混合动态可用本工具（默认同当前号）；勿用好友混排代替。` +
+        ` 当前登录: ${selfId}；省略 host_uin 时 hostuin=${selfId}。默认不拉图；raw_json=true 返回整段 JSON。摘要含【类别】等标签。`,
       parameters: {
         type: "object",
         properties: {
@@ -778,7 +823,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const posts = extractPosts(res.data);
         if (posts.length === 0) return textResult(`没有解析到动态条目（接口可能返回空或 HTML 结构与解析器不兼容）。\n\n${meta}`);
         const state = { postsWithBase64: 0 };
-        const lines = posts.map((post) => summarizeActFeedItem(post, selfId, imageTempDir, state));
+        const lines = posts.map((post) => summarizeActFeedItem(post, selfId, imageTempDir, state, selfId));
         const pi = dataObj != null ? dataObj["_page_info"] : undefined;
         const merged =
           pi && typeof pi === "object" && !Array.isArray(pi) && readBoolLoose((pi as JsonObject)["all_pages"]);
@@ -829,7 +874,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const detail = asObject(res.data) ?? asObject((res.data as { data?: unknown })?.data);
         const state = { postsWithBase64: 0 };
         const summary = detail
-          ? summarizePost(detail, userId, imageTempDir, state)
+          ? summarizePost(detail, userId, imageTempDir, state, { loginUin: selfId })
           : "(无解析字段，请 raw_json=true)";
         return textResult(`说说详情:\n${summary}\n\n${meta}`);
       },
@@ -890,6 +935,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       description:
         "查看说说评论列表。桥接返回字段多为 commentlist；tid 须与该说说所属空间主人一致。" +
         " 文本首段含【评论接口元数据】（commentListSource、feeds3_comment_total 等）；每条含 pic_len。" +
+        " 要看评论图：用 raw_json=true 取完整 pic URL（勿用手抄摘要），再 qzone_fetch_image 落盘后用 image 工具读图。" +
         " raw_json=true 时返回桥接 data 完整 JSON（仅调试，体积可能很大）。" +
         ` 当前账号: ${selfId}；省略 user_id 时按当前登录号请求（与桥接默认一致）。`,
       parameters: {
@@ -990,7 +1036,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     },
     {
       name: "qzone_get_likes",
-      description: "查看一条说说的点赞列表。",
+      description:
+        "查看一条说说的点赞列表（feeds3 等解析结果）。列表可能为空而 qzone_get_traffic 的 like 仍大于 0，属口径差异，非必然故障。",
       parameters: {
         type: "object",
         required: ["user_id", "tid"],
@@ -1059,9 +1106,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     {
       name: "qzone_get_friend_feeds",
       description:
-        "拉取「好友混排」最近空间动态（与指定某人主页时间线不同）。分页用 cursor：须从上一响应 _meta.next_cursor 原样复制，勿编造。" +
-        "**不用于**回答「我自己的说说有哪些」：混排中本人动态稀疏，请用 qzone_get_posts（省略 user_id）或 qzone_get_user_act_feed qq=当前号。" +
-        "要看某个固定 QQ 的主页说说列表请用 qzone_get_posts（offset/count）。" +
+        `${QZONE_FEED_ROUTING} 本工具：**好友混排**最近动态，与某人主页时间线不同。分页**仅** cursor：从上一响应 _meta.next_cursor 原样复制。**不用于**「我有哪些说说」→ 请用 qzone_get_posts 或本人 qzone_get_user_act_feed。固定 QQ 主页纯说说→ qzone_get_posts。` +
+        ` 摘要含 user= 与 nick=（若有）；带「[当前登录号发表]」的是当前登录 QQ 发的动态，**不要**说成私聊里的「你」（对话用户可能是另一 QQ）。` +
         ` 当前账号: ${selfId}。默认摘要+_meta；raw_json=true 返回整段 JSON（可能含 base64，体积大）。`,
       parameters: {
         type: "object",
@@ -1099,7 +1145,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const feeds = extractFeeds(res.data);
         if (feeds.length === 0) return textResult(`没有找到好友动态。\n\n${meta}`);
         const state = { postsWithBase64: 0 };
-        const lines = feeds.map((feed) => summarizeFeed(feed, imageTempDir, state));
+        const lines = feeds.map((feed) => summarizeFeed(feed, imageTempDir, state, selfId));
         return textResult(`好友动态 (${feeds.length} 条):\n\n${lines.join("\n\n")}\n\n${meta}`);
       },
     },
@@ -1208,7 +1254,8 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       name: "qzone_fetch_image",
       description:
         "用空间桥接**已登录 Cookie** 拉取 QZone CDN 图片（qpic.cn、photo.store.qq.com 等白名单），保存到临时文件并返回路径。" +
-        "「get_comments」里的 pic URL 在**普通浏览器地址栏**常 403/404（缺 Cookie、Referer 或 URL 被截断）；要预览请用本工具传入**完整** url。",
+        " 完整 URL 请从 qzone_get_comments raw_json=true 的 commentlist[].pic 取，勿用手抄聊天摘要（易截断）。" +
+        " 浏览器地址栏裸开常 403/404（缺 Cookie/Referer）。",
       parameters: {
         type: "object",
         required: ["url"],

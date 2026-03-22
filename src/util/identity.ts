@@ -18,6 +18,8 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
   }
 
   const lines: string[] = [`[身份] ${nickname}(${userId}) 头像: ${avatarUrl}`];
+  const sid = opts?.selfId?.trim();
+  if (sid) lines.push(t.identityBotSelfQq(sid));
   const paths = [`memory/users/${userId}.md`];
   paths.push("memory/social/relationships.md");
   lines.push(`[记忆] ${paths.join(" | ")}`);
@@ -41,11 +43,14 @@ export function buildIdentityBlock(msg: QQMessage, opts?: { selfId?: string }): 
  * Stable group header — included once in the current-turn context for group chats.
  * Tells the model it is the same bot across the whole group conversation.
  */
-export function buildGroupHeader(groupId: string): string {
+export function buildGroupHeader(groupId: string, botSelfId?: string): string {
   const groupAvatar = `https://p.qlogo.cn/gh${groupId}/${groupId}/0`;
+  const botLine =
+    botSelfId?.trim() ? [t.identityBotSelfQq(botSelfId.trim())] : [];
   return [
     `[群聊模式] 你是 QQ 群 ${groupId} 里的同一个机器人。以下为群内多人对话，请以群成员身份连贯参与，保持统一人格。`,
     `[群头像] ${groupAvatar}`,
+    ...botLine,
     `[群记忆] memory/groups/${groupId}.md | memory/social/relationships.md`,
     t.identityHintGroup,
     `[回复] 只输出要发给群里的消息，不要输出内心独白、推理过程等元描述。`,

@@ -30,6 +30,20 @@ import type { QQMessage } from "./napcat/types.js";
 import type { PluginLogger, PluginRuntime, OpenClawConfig } from "./types-compat.js";
 import { zh as t } from "./locale/zh.js";
 
+/** 与 OpenClaw 原生 /model 写入的 sessions.json 对齐，避免仅内存 Map 与磁盘不一致。 */
+function applySessionModelOverrideFromDisk(
+  ctx: PluginContext,
+  store: SessionStore,
+  sessionKey: string,
+): void {
+  const o = store.readModelOverrideForKey(sessionKey);
+  if (o) {
+    ctx.modelOverrides.set(sessionKey, o);
+  } else {
+    ctx.modelOverrides.delete(sessionKey);
+  }
+}
+
 /** 若整段内容像内部错误（JSON 解析、API 校验、流事件顺序等），改为返回友好提示，避免把堆栈或错误原文发给用户 */
 function sanitizeReplyText(text: string): string {
   if (!text || typeof text !== "string") return text;
@@ -443,6 +457,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   const dispatchToAgent = async (msg: QQMessage, body: string, identityBlock: string): Promise<string | null> => {
     try {
       const route = resolveRouteForMessage(runtime, ocConfig, accountId, msg);
+      applySessionModelOverrideFromDisk(ctx, sessionStore, route.sessionKey);
 
       const chatType = msg.messageType === "group" ? "group" : "dm";
       const to = msg.messageType === "group" && msg.groupId ? `g:${msg.groupId}` : `p:${msg.userId}`;
@@ -459,7 +474,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
       if (isGroup) {
         // Group: stable header + per-turn speaker identity + body
         // Body (persisted in history) stays lean; BodyForAgent (current turn) is enriched
-        const groupHeader = buildGroupHeader(msg.groupId!);
+        const groupHeader = buildGroupHeader(msg.groupId!, config.connection.selfId);
         const continuityBlock = continuityStore.buildGroupSupplement(msg.userId, msg.groupId!);
         const profileHint = buildUserProfileHint(contactProfiles, msg.userId, msg.groupId!);
         const confNote = confidentialNotes.getNotesForUser(msg.userId);
@@ -649,6 +664,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
   ): Promise<string | null> => {
     const route = resolveRouteForMessage(runtime, ocConfig, accountId, msg);
     const sessionKey = sessionKeyOverride ?? route.sessionKey;
+    applySessionModelOverrideFromDisk(ctx, sessionStore, sessionKey);
 
     const chatType = msg.messageType === "group" ? "group" : "dm";
     const to = msg.messageType === "group" && msg.groupId ? `g:${msg.groupId}` : `p:${msg.userId}`;
@@ -661,7 +677,7 @@ export async function startGateway(params: GatewayParams): Promise<void> {
 
     let bodyForAgent: string;
     if (isGroup) {
-      const groupHeader = buildGroupHeader(msg.groupId!);
+      const groupHeader = buildGroupHeader(msg.groupId!, config.connection.selfId);
       const continuityBlock = continuityStore.buildGroupSupplement(msg.userId, msg.groupId!);
       const profileHint = buildUserProfileHint(contactProfiles, msg.userId, msg.groupId!);
       const confNote = confidentialNotes.getNotesForUser(msg.userId);

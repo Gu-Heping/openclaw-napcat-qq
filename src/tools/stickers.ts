@@ -142,14 +142,14 @@ export function createStickerTools(ctx: PluginContext): AnyAgentTool[] {
         required: ["query"],
         properties: {
           query: { type: "string", description: "检索关键词，例如：无语/赞同/笑哭" },
-          top_k: { type: "number", description: "返回数量，默认 5" },
+          top_k: { type: "number", description: "返回数量，默认 3（需多候选对比时可加大）" },
         },
       },
       async execute(_id: string, params: Record<string, unknown>): Promise<AgentToolResult> {
         const store = ctx.stickerStore;
         if (!store) return textResult("[错误] sticker store 未初始化");
         const query = String(params.query ?? "").trim();
-        const topK = Number(params.top_k ?? 5);
+        const topK = Number(params.top_k ?? 3);
         if (!query) return textResult("[错误] 缺少 query");
         const hits = store.searchWithScores(query, topK);
         if (!hits.length) return textResult("未找到匹配表情包");

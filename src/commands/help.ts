@@ -2,11 +2,12 @@ import type { Command, CommandContext } from "./types.js";
 import type { QQMessage } from "../napcat/types.js";
 import { zh as t } from "../locale/zh.js";
 
-export const helpCommand: Command = {
-  names: ["help", "h", "帮助"],
-  description: "显示帮助信息",
+/** 仅 `/帮助`：避免与核心 `/help` 抢名；群聊未 @ 时仍可查看合并说明。 */
+export const qqHelpZhCommand: Command = {
+  names: ["帮助"],
+  description: "QQ 合并指令说明（中文）",
   execute(msg: QQMessage, _args: string, _ctx: CommandContext): string {
-    const mention = msg.messageType === "group" ? "（群聊需 @我 才会回复）" : "";
+    const mention = msg.messageType === "group" ? "（群聊需 @我 才会触发核心指令与 AI 回复）" : "";
     return t.helpText(mention);
   },
 };

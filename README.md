@@ -217,7 +217,13 @@ NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config
 - **信息查询**：`qq_get_stranger_info`、`qq_get_group_info`、`qq_get_user_avatar`、`qq_get_group_avatar`、`qq_get_friend_list`、`qq_get_group_list`、`qq_get_group_member_list`。
 - **群管理**：`qq_kick_group_member`、`qq_ban_group_member`、`qq_set_group_card`、`qq_set_group_name`。
 - **请求处理**：`qq_get_pending_requests`、`qq_handle_friend_request`、`qq_handle_group_request`。
-- **QQ 空间**（需 NapCat 接 [onebot-qzone](https://github.com/Gu-Heping/onebot-qzone) 桥接）：`qzone_get_friend_feeds`（好友最近说说，游标分页）、`qzone_get_posts`（指定用户说说）、`qzone_get_comments`（评论列表，PC/mobile 失败时使用 feeds3 兜底）、`qzone_comment`（发评论/回复评论）、`qzone_like`（点赞，仅需 tid）等。
+- **QQ 空间**（需 NapCat 接 [onebot-qzone](https://github.com/Gu-Heping/onebot-qzone) 桥接；**参数与路由以各工具 `description` 为准**）：
+  - **说说时间线**：`qzone_get_posts`（feeds3 / `get_emotion_list`；**支持 `cursor` + `offset` 分页**，见返回 `_meta.next_call`）
+  - **本人混合动态（ic2）**：`qzone_get_space_html_act_feed`、`qzone_get_user_act_feed`（`start/count`，与说说翻页勿混用）
+  - **好友混排**：`qzone_get_friend_feeds`（**cursor** 游标）
+  - **评论 / 赞 / 转发 / 详情**：`qzone_get_comments`、`qzone_comment`、`qzone_delete_comment`、`qzone_like`、`qzone_unlike`、`qzone_get_likes`、`qzone_forward`、`qzone_get_post_detail`、`qzone_get_post_images`、`qzone_get_traffic`
+  - **发删说说 / 相册等**：`qzone_publish`、`qzone_delete`、`qzone_get_albums`、`qzone_get_photos`、`qzone_upload_image`、`qzone_fetch_image`（评论图完整 URL + 落盘）、`qzone_emoji_list` …
+  - **运维**：`qzone_status`、`qzone_version`、`qzone_probe_routes`；其它见 `src/tools/qzone.ts` 注册表。
 - **表情包 / 梗图库**：`sticker_search`（检索，返回 rank/score）、`sticker_send`（发库内图）、`sticker_collect`（收藏；支持本地路径或 QQ 官方 CDN https，按文件内容去重）、`sticker_get_semantics` / `sticker_update_semantics` / `sticker_alias_add`。配置见 `plugins.entries["napcat-qq"].stickers`（`storageBackend`、`searchMode` 等，见 `config.ts` / `openclaw.plugin.json`）。
 
 工具参数与说明见 **src/tools/** 下各文件的 `name`、`description` 与 `parameters`。

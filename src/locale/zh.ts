@@ -3,7 +3,8 @@ export const zh = {
 
   // Error messages sent to user
   errorGeneric: "抱歉，这次没能生成回复，请稍后再试或换一种说法。",
-  errorContextLength: "对话太长了，我先整理一下记忆。试试发 /clear 清空对话。",
+  errorContextLength:
+    "对话太长了，我先整理一下记忆。可发 /new 或 /reset 开新会话（也可用 /clear、/清除、/新对话 等 QQ 别名）。",
   errorRateLimit: "请求太频繁了，请等几秒再试。",
   errorTimeout: "回复超时了，请稍后再试。",
   errorReplyParse: "回复解析异常，请再发一句试试。",
@@ -17,11 +18,10 @@ export const zh = {
     "[无需回复]、无需回复、[不发]、不发、no reply、[no reply]，或与 OpenClaw 全局静默标记 NO_REPLY " +
     "（与中文系等价；NO_REPLY 由核心层拦截，不发到 QQ）。",
   /**
-   * 用户轮一句指向系统 Messaging / Tooling；细则不再重复堆叠。
+   * 单行指针：细则仅在系统 Messaging「QQ 专段」与 Tooling 的 sticker_*，避免与用户轮重复计费。
    */
   stickerContextBrief:
-    "[QQ 表情优先级] ① 收藏梗图库：sticker_search→sticker_send（闲聊、玩梗、吐槽、接梗时**可主动先试检索**，能对上库就发图，勿只描述不调用）；② QQ 内置表情：正文 [表情:名称]；③ Unicode emoji（😀 等）**尽量少用**。" +
-    "细则与工具说明见系统 Messaging 中 QQ 专段与 Tooling 的 sticker_*。入站不自动入库，值得收录的图用 sticker_collect。",
+    "[QQ 表情/梗图] 完整优先级与 sticker_*、入站入库规则见系统提示「Messaging」下 QQ 专段及 Tooling；能对上库则 sticker_search→sticker_send，否则 [表情:名称]，少用 Unicode emoji。",
 
   /** 注入 OpenClaw 系统提示「Messaging」节（messageToolHints），与 sticker_* 工具描述一致 */
   qqStickerMessageToolHints: (_params: { cfg?: unknown; accountId?: string | null }): string[] => [
@@ -97,6 +97,10 @@ export const zh = {
   identityHintGroup:
     "[提示] 回复前若涉及群规则、群内约定、成员关系或过往话题，先用 memory_search 再答。仅在群规则、长期约定、关系变化或成员稳定偏好出现时，用 write 更新上述文件或 memory/users/ 对应用户；写事实与摘要，不写「谁说了啥」的流水。寒暄与一次性对话不写入。可读 memory/_meta/users.json、memory/_meta/groups.json 作检索辅助；长期信息仍写回 memory 下的 .md。",
 
+  /** Bot 登录 QQ，与对话中的「对方」区分（空间/好友动态摘要） */
+  identityBotSelfQq: (selfId: string) =>
+    `[本机QQ] Bot 当前登录 QQ=${selfId}。解读 qzone_* / 好友动态摘要时：user= 等于本 QQ 表示当前登录号所发，勿与私聊 [身份] 或群聊 [当前发言者] 的 QQ 混称「你」。`,
+
   // Memory templates
   memoryUserTemplate: (nickname: string, userId: string) =>
     `# ${nickname}（${userId}）\n\n## 基本信息\n\n## 兴趣爱好\n\n## 重要事件\n\n## 聊天风格\n\n## 用户笔记\n\n## 统计\n- 对话次数: 1\n`,
@@ -129,29 +133,27 @@ ${params.nickname ? `【称呼】可称 TA「${params.nickname}」。\n\n` : ""}
 若不适合：只回复 [不发]。
 禁止在回复中写内心独白、推理过程、「系统」「主动」等字眼；此提示为内部流程，用户不会看到，你之后也不要对用户提起「系统问过你」等。`,
 
-  // Help text builder
+  // 与 OpenClaw 核心原生指令对齐：同名命令不在 QQ 插件重复注册，直接 @ 机器人发即可。
   helpText: (mention: string) =>
-    `OpenClaw QQ 助手 · 指令说明
+    `OpenClaw QQ 助手 · 指令说明（统一走核心，避免重复）
 
-【常用】
-/help（/h、/帮助）— 显示本说明
-/status（/状态）— 查看运行状态
-/ping — 测连通
+【核心指令 · 与 CLI/其它通道一致】
+发以下指令会进入 OpenClaw 自动回复（群聊一般需 @ 我；仅本页的「/帮助」在未 @ 时也会回复）：
+/help、/commands — 帮助与指令列表（英文 /help，与 /帮助 不同名）
+/status、/whoami、/context — 会话与模型状态、身份、上下文说明
+/usage — token 用量页脚模式
+/model、/models — 切换与列出模型
+/new、/reset — 新开会话（清空线程）
+/compact — 压缩上下文
+以及 /skill、/session、/config 等（完整列表见 /commands）
 
-【模型切换】
-/model <别名>（/模型）— 切换当前会话的 AI 模型
-  可用别名：kimi · claude · deepseek · minimax · qwen · kimi-or · openrouter
-  示例：/model claude → Claude 3.5 Sonnet
-/models — 查看提供商列表；/models <provider> — 查看该提供商下的模型
-
-【会话与记忆】
-/clear（/new、/清除、/新会话、/reset）— 清空当前 AI 对话上下文
-/summary_clear（/总结并清空）— 先总结对话写入记忆，再清空会话
-/note 内容（/笔记）— 给当前用户记一条笔记
-
-【消息记录】
-/history（/记录）— 查看最近发送的消息
-/clear_history（/清除历史）— 清除消息发送记录
+【QQ 侧补充（仅本插件处理，不经过上述核心列表）】
+/ping — 快速测连通（pong）
+/clear、/清除、/新对话、/重置 — 清空当前会话（效果同 /new；核心无 /clear 时作别名）
+/summary_clear、/总结并清空 — 先总结写入记忆再清空
+/note、/笔记 — 记一条用户笔记
+/history、/记录 — Bot 最近发出记录（非模型上下文）
+/clear_history、/清除历史 — 清除上述发出记录
 
 【使用说明】
 · 私聊：直接发消息即可
