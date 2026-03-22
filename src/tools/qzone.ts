@@ -18,6 +18,91 @@ const SIMPLE_QZONE_EMOJIS: Record<string, string> = {
   no: "e188",
 };
 
+/** 与 onebot-qzone feeds3/ic2 解析一致，供 OpenClaw 区分动态形态（非过滤条件） */
+const QZONE_APPID_CATEGORY_ZH: Record<string, string> = {
+  "311": "说说",
+  "2": "相册",
+  "4": "转发",
+  "202": "分享·网易云音乐",
+  "2100": "分享·外链应用",
+  "217": "点赞记录",
+  "2160": "分享·QQ音乐",
+  "268": "分享·QQ音乐",
+  "3168": "分享·哔哩哔哩",
+};
+
+function truncateForDisplay(s: string, max: number): string {
+  const t = s.replace(/\s+/g, " ").trim();
+  if (t.length <= max) return t;
+  return `${t.slice(0, max)}…`;
+}
+
+/**
+ * 为 ic2 / feeds3 混合流生成结构化类别提示，便于模型区分说说、应用分享、转发层等。
+ */
+function buildOpenClawActFeedCategoryLines(post: JsonObject | null): string[] {
+  if (!post) return [];
+  const lines: string[] = [];
+  const appidRaw = readString(post, "appid", "_appid");
+  const appid = appidRaw || "311";
+  const typeid = readString(post, "typeid", "_typeid");
+  const appName = readString(post, "appName", "app_name", "_app_name");
+  const baseKind = QZONE_APPID_CATEGORY_ZH[appid] ?? (appName ? `分享·${appName}` : `分享·未知应用`);
+  const rtCon = readString(post, "rt_con", "forwardContent", "_forward_content");
+  const rtTid = readString(post, "rt_tid", "forward_tid", "_forward_tid");
+  const rtName = readString(post, "rt_uinname", "forwardNickname", "_forward_nickname");
+  const fwdnum = readNumber(post, "fwdnum", "forward_count") ?? 0;
+  const hasForwardLayer = Boolean(rtCon || rtTid || fwdnum > 0);
+  let kindLabel = baseKind;
+  if (appid === "311" && hasForwardLayer) kindLabel = "说说·含转发";
+  else if (appid === "311") kindLabel = "说说";
+  const typePart = typeid ? ` typeid=${typeid}` : "";
+  lines.push(`【类别】${kindLabel} | appid=${appid}${typePart}`);
+  if (hasForwardLayer && (rtCon || rtName || rtTid)) {
+    const who = rtName ? `来自 ${rtName}` : rtTid ? `rt_tid=${rtTid}` : "转发内容";
+    const body = rtCon ? truncateForDisplay(rtCon, 220) : "(无正文摘要)";
+    lines.push(`【转发层】${who} — ${body}`);
+  }
+  const shareTitle = readString(post, "appShareTitle", "app_share_title", "_app_share_title");
+  const mainText = readString(post, "content", "message", "text", "summary");
+  if (shareTitle && shareTitle !== mainText) {
+    lines.push(`【卡片标题/附题】${truncateForDisplay(shareTitle, 200)}`);
+  }
+  const ms = post["musicShare"];
+  if (ms && typeof ms === "object" && !Array.isArray(ms)) {
+    const mo = ms as JsonObject;
+    const song = readString(mo, "songName");
+    if (song) {
+      const artist = readString(mo, "artistName");
+      const play = readString(mo, "playUrl");
+      lines.push(
+        `【音乐卡片】${song}${artist ? ` — ${artist}` : ""}${play ? ` | link=${truncateForDisplay(play, 120)}` : ""}`,
+      );
+    }
+  }
+  const videos = asArray(post["video"]);
+  if (videos.length > 0) {
+    const v0 = asObject(videos[0]);
+    const vu = readString(v0, "videoUrl", "video_url");
+    const vid = readString(v0, "videoId", "video_id");
+    lines.push(
+      `【视频】${videos.length} 段${vid ? ` id=${vid}` : ""}${vu ? ` | ${truncateForDisplay(vu, 160)}` : ""}`,
+    );
+  }
+  return lines;
+}
+
+function summarizeActFeedItem(
+  post: JsonObject | null,
+  fallbackUserId: string | undefined,
+  imageTempDir: string,
+  state: { postsWithBase64: number },
+): string {
+  const hints = buildOpenClawActFeedCategoryLines(post);
+  const body = summarizePost(post, fallbackUserId, imageTempDir, state);
+  return hints.length > 0 ? `${hints.join("\n")}\n${body}` : body;
+}
+
 function textResult(text: string): AgentToolResult {
   return { content: [{ type: "text", text }] };
 }
@@ -138,7 +223,7 @@ function summarizePost(post: JsonObject | null, fallbackUserId: string | undefin
 }
 
 function summarizeComment(comment: JsonObject | null): string {
-  const id = readString(comment, "id", "comment_id") || "-";
+  const id = readString(comment, "id", "comment_id", "commentid") || "-";
   const uin = readString(comment, "uin", "user_id") || "-";
   const nickname = readString(comment, "nickname", "name") || "-";
   const time = formatQzoneTimeForDisplay(comment);
@@ -163,10 +248,18 @@ function extractPosts(data: unknown): JsonObject[] {
 
 function extractComments(data: unknown): JsonObject[] {
   const obj = asObject(data);
-  const buckets = [obj?.comments, obj?.comment_list, obj?.list, obj?.data];
+  // 桥接 getCommentsBestEffort 使用 commentlist（与 PC comment_list 不同名）
+  const buckets = [obj?.commentlist, obj?.comments, obj?.comment_list, obj?.list, obj?.data];
   for (const bucket of buckets) {
     const arr = asArray(bucket).map((item) => asObject(item)).filter(Boolean) as JsonObject[];
     if (arr.length > 0) return arr;
+    const nested = asObject(bucket);
+    if (nested) {
+      const inner = asArray(nested.list ?? nested.commentlist ?? nested.comments ?? nested.comment_list)
+        .map((item) => asObject(item))
+        .filter(Boolean) as JsonObject[];
+      if (inner.length > 0) return inner;
+    }
   }
   return [];
 }
@@ -216,7 +309,7 @@ function readBoolLoose(v: unknown): boolean {
 function buildQzoneMetaBlock(
   data: JsonObject | null,
   ctx: {
-    kind: "posts" | "friend_feeds" | "post_detail";
+    kind: "posts" | "friend_feeds" | "post_detail" | "html_act_all";
     self_id: string;
     user_id?: string;
     tid?: string;
@@ -225,6 +318,15 @@ function buildQzoneMetaBlock(
     max_pages?: number;
     cursor_used?: string;
     bridge_ok?: boolean;
+    start?: number;
+    scope?: number;
+    /** html_act_all：next_call 用简名工具时的工具名与主参数名 */
+    act_tool?: "qzone_get_user_act_feed" | "qzone_get_space_html_act_feed";
+    act_qq?: string;
+    /** qzone_get_user_act_feed：与桥接 user_id 同义的页面语境 QQ */
+    page_context_qq?: string;
+    /** qzone_get_space_html_act_feed：续翻时带上与原请求一致的 host_uin */
+    host_uin_for_act?: string;
   },
 ): string {
   const lines: string[] = ["---", "_meta"];
@@ -272,6 +374,67 @@ function buildQzoneMetaBlock(
       if (readBoolLoose(data["has_more"]) && nc) {
         const countPart = cnt != null && Number.isFinite(cnt) ? ` count=${Math.trunc(cnt)}` : "";
         lines.push(`next_call: qzone_get_friend_feeds cursor=${JSON.stringify(nc)}${countPart}`);
+      }
+    }
+  } else if (ctx.kind === "html_act_all") {
+    const uid = (ctx.user_id?.trim() || ctx.self_id).trim();
+    const st = ctx.start ?? 0;
+    const cnt = ctx.count ?? 10;
+    const sc = ctx.scope;
+    const toolName = ctx.act_tool ?? "qzone_get_space_html_act_feed";
+    const qqArg = (ctx.act_qq?.trim() || uid).trim();
+    lines.push("kind: html_act_all");
+    lines.push(`tool: ${toolName}`);
+    if (toolName === "qzone_get_user_act_feed") {
+      lines.push(`qq: ${qqArg}`);
+    } else {
+      lines.push(`user_id: ${uid}`);
+    }
+    lines.push(`start: ${st}`);
+    lines.push(`count: ${cnt}`);
+    if (sc != null && Number.isFinite(sc)) lines.push(`scope: ${sc}`);
+    lines.push(
+      "note: ic2 start/count 分页；勿与 qzone_get_posts 的 offset 混续翻；要「混合全量动态」用 all_pages=true。每条开头的【类别】/【转发层】等为展示标签，appid 与 QZone 内部一致，便于区分说说/分享/音乐/视频等。",
+    );
+    if (data) {
+      lines.push(`has_more: ${readBoolLoose(data["has_more"])}`);
+      const ns = readNumber(data, "next_start");
+      if (ns != null) lines.push(`next_start: ${ns}`);
+      const pi = data["_page_info"];
+      if (pi && typeof pi === "object") lines.push(`_page_info: ${JSON.stringify(pi)}`);
+    }
+    if (data && readBoolLoose(data["has_more"])) {
+      const nextSt = readNumber(data, "next_start") ?? st + cnt;
+      const scopePart = sc != null && Number.isFinite(sc) ? ` scope=${Math.trunc(sc)}` : "";
+      const piRaw = data["_page_info"];
+      const piObj = piRaw && typeof piRaw === "object" && !Array.isArray(piRaw) ? (piRaw as JsonObject) : null;
+      const mergedAll = readBoolLoose(piObj?.["all_pages"]);
+      const truncatedMerge = readBoolLoose(piObj?.["truncated_by_max_rounds"]);
+      const prevMax = readNumber(piObj, "max_rounds");
+      const suggestMax =
+        prevMax != null && Number.isFinite(prevMax) ? Math.min(80, Math.trunc(prevMax) + 20) : 50;
+      const pageCtxPart =
+        toolName === "qzone_get_user_act_feed" && ctx.page_context_qq?.trim()
+          ? ` page_context_qq=${ctx.page_context_qq.trim()}`
+          : "";
+      if (toolName === "qzone_get_user_act_feed") {
+        if (mergedAll && truncatedMerge) {
+          lines.push(
+            `next_call: qzone_get_user_act_feed qq=${qqArg} start=${Math.trunc(nextSt)} count=${cnt} all_pages=true max_rounds=${suggestMax}${scopePart}${pageCtxPart}`,
+          );
+        } else {
+          lines.push(`next_call: qzone_get_user_act_feed qq=${qqArg} start=${nextSt} count=${cnt}${scopePart}${pageCtxPart}`);
+        }
+      } else if (mergedAll && truncatedMerge) {
+        const hu = ctx.host_uin_for_act?.trim();
+        const hostPart = hu ? ` host_uin=${hu}` : "";
+        lines.push(
+          `next_call: qzone_get_space_html_act_feed user_id=${uid} start=${Math.trunc(nextSt)} count=${cnt} all_pages=true max_rounds=${suggestMax}${scopePart}${hostPart}`,
+        );
+      } else {
+        const hu = ctx.host_uin_for_act?.trim();
+        const hostPart = hu ? ` host_uin=${hu}` : "";
+        lines.push(`next_call: qzone_get_space_html_act_feed user_id=${uid} start=${nextSt} count=${cnt}${scopePart}${hostPart}`);
       }
     }
   } else {
@@ -353,6 +516,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       name: "qzone_get_posts",
       description:
         "拉取「指定 QQ 号的空间主页说说时间线」（自己或他人）。分页用 offset+count（offset=桥接 pos，从 0 起），与好友混排流不同。" +
+        "用户问「我的/自己的说说或动态」时**必须**用本工具（省略 user_id 即当前号），**禁止**用 qzone_get_friend_feeds 再筛本人——好友混排里自己的条目极少，会表现为只有一两条。" +
         "若要看「全好友混排最近动态」请用 qzone_get_friend_feeds（cursor 游标）。" +
         "需要单条完整结构/转发链时用 qzone_get_post_detail。" +
         ` 当前账号: ${selfId}。默认摘要+末尾 _meta；raw_json=true 返回整段 JSON（常含图片 base64，体积大，仅明确需要原始字段时用）。`,
@@ -408,6 +572,171 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
         const state = { postsWithBase64: 0 };
         const lines = posts.map((post) => summarizePost(post, userId, imageTempDir, state));
         return textResult(`说说列表 (${posts.length} 条):\n\n${lines.join("\n\n")}\n\n${meta}`);
+      },
+    },
+    {
+      name: "qzone_get_user_act_feed",
+      description:
+        "按 **QQ 号** 拉取 ic2 **feeds_html_act_all** 动态流（**说说、分享、音乐等混合**，不按类型拆分）。**all_pages=true** 时由桥接自动多页合并（tid 去重），用于「尽量拉全」；仍受 **max_rounds** 与腾讯接口限制。" +
+        "看本人混合动态时 **qq** 填当前号（与 `qzone_get_posts` 纯说说列表互补）；勿用好友混排代替。" +
+        "单页模式为一次 HTTP 请求；与 **qzone_get_posts**（feeds3 纯说说 offset）**不等价**，**start/count 勿与 offset 混续翻**。" +
+        ` 当前登录: ${selfId}。默认不拉图；raw_json=true 返回整段 JSON。人类可读摘要中每条含【类别】等标签便于区分形态；要原始字段用 raw_json。`,
+      parameters: {
+        type: "object",
+        required: ["qq"],
+        properties: {
+          qq: { type: "string", description: "动态流主人 QQ（桥接 feed_owner / hostuin）" },
+          start: { type: "number", description: "分页起点，默认 0；多页截断后续拉见 _meta.next_call" },
+          count: { type: "number", description: "每页条数，默认 10，最大 50（单页与 all_pages 每轮相同）" },
+          page_context_qq: {
+            type: "string",
+            description: "可选，对应 URL 的 uin（页面语境）；省略则与 qq 相同",
+          },
+          scope: { type: "number", description: "可选，默认 0" },
+          all_pages: {
+            type: "boolean",
+            description: "为 true 时合并多页混合动态（非仅说说）；默认 false 仅首屏",
+          },
+          max_rounds: {
+            type: "number",
+            description: "all_pages 时最多请求轮数，默认 30，最大 80",
+          },
+          include_image_data: {
+            type: "boolean",
+            description: "为 true 时为 pic 拉 base64，默认 false",
+          },
+          raw_json: { type: "boolean", description: "为 true 时仅输出 JSON" },
+        },
+      },
+      async execute(_id, params) {
+        const err = guard();
+        if (err) return textResult(err);
+        const qq = String(params.qq ?? "").trim();
+        if (!qq) return textResult("[QZone错误] 缺少 qq");
+        const start = Number(params.start ?? 0);
+        const count = Number(params.count ?? 10);
+        const pageCtx =
+          params.page_context_qq != null && String(params.page_context_qq).trim() !== ""
+            ? String(params.page_context_qq).trim()
+            : undefined;
+        const scopeRaw = params.scope;
+        const scope = scopeRaw == null ? undefined : Number(scopeRaw);
+        const rawJson = readBooleanParam(params.raw_json);
+        const includeImg = readBooleanParam(params.include_image_data);
+        const allPages = readBooleanParam(params.all_pages);
+        const maxRoundsRaw = params.max_rounds;
+        const maxRounds = maxRoundsRaw == null ? undefined : Number(maxRoundsRaw);
+        const res = await ctx.qzoneApi!.getUserActFeed(qq, Number.isFinite(start) ? start : 0, Number.isFinite(count) ? count : 10, {
+          pageContextQq: pageCtx,
+          scope: scope != null && Number.isFinite(scope) ? scope : undefined,
+          includeImageData: includeImg,
+          allPages,
+          maxRounds: maxRounds != null && Number.isFinite(maxRounds) ? Math.trunc(maxRounds) : undefined,
+        });
+        if (res.status !== "ok") return textResult(formatResponse(res));
+        if (rawJson) {
+          return textResult(JSON.stringify({ ok: true, retcode: res.retcode, data: res.data }, null, 2));
+        }
+        const dataObj = asObject(res.data);
+        const meta = buildQzoneMetaBlock(dataObj, {
+          kind: "html_act_all",
+          self_id: selfId,
+          user_id: pageCtx ?? qq,
+          act_tool: "qzone_get_user_act_feed",
+          act_qq: qq,
+          start: Number.isFinite(start) ? start : 0,
+          count: Number.isFinite(count) ? count : 10,
+          scope: scope != null && Number.isFinite(scope) ? scope : undefined,
+          page_context_qq: pageCtx,
+        });
+        const posts = extractPosts(res.data);
+        if (posts.length === 0) return textResult(`没有解析到动态（可能无权限或 HTML 不兼容）。\n\n${meta}`);
+        const state = { postsWithBase64: 0 };
+        const lines = posts.map((post) => summarizeActFeedItem(post, qq, imageTempDir, state));
+        const pi = dataObj != null ? dataObj["_page_info"] : undefined;
+        const merged =
+          pi && typeof pi === "object" && !Array.isArray(pi) && readBoolLoose((pi as JsonObject)["all_pages"]);
+        const head = merged ? `用户 ${qq} 的 ic2 混合动态（多页合并，${posts.length} 条）` : `用户 ${qq} 的 ic2 动态 (${posts.length} 条)`;
+        return textResult(`${head}:\n\n${lines.join("\n\n")}\n\n${meta}`);
+      },
+    },
+    {
+      name: "qzone_get_space_html_act_feed",
+      description:
+        "ic2 **feeds_html_act_all**：**混合动态流**（说说、分享等），**不按类型过滤**。**all_pages=true** 时桥接多页合并；主人由 **host_uin**（hostuin）决定，**user_id** 仅为 URL 语境 uin。" +
+        "用户要看「本人空间混合动态」时可用本工具（默认 hostuin 已是当前号）；**不要**用好友混排流代替。" +
+        "与 **qzone_get_posts**（feeds3 说说 offset）**不等价**；**start/count 勿与 offset 混续翻**。" +
+        ` 当前登录: ${selfId}；省略 host_uin 时 hostuin=${selfId}。默认不拉图；raw_json=true 返回整段 JSON。摘要含【类别】等标签区分说说/分享/转发层等。`,
+      parameters: {
+        type: "object",
+        properties: {
+          user_id: {
+            type: "string",
+            description: "可选。请求里的 uin（页面语境）；省略则用当前登录号。浏览器在他人空间时 uin 常为对方 QQ，但返回仍是 hostuin 的动态",
+          },
+          start: { type: "number", description: "起始偏移，默认 0" },
+          count: { type: "number", description: "本页条数，默认 10，最大 50（桥接限制）" },
+          scope: { type: "number", description: "可选，默认 0（与浏览器一致）" },
+          host_uin: { type: "string", description: "可选，对应 hostuin（动态流主人）；省略则当前登录号。与浏览器抓包一致时可与 user_id 不同" },
+          all_pages: {
+            type: "boolean",
+            description: "为 true 时合并多页混合动态；默认 false",
+          },
+          max_rounds: { type: "number", description: "all_pages 时最多请求轮数，默认 30，最大 80" },
+          include_image_data: {
+            type: "boolean",
+            description: "为 true 时桥接为每条 pic 拉 base64，默认 false",
+          },
+          raw_json: {
+            type: "boolean",
+            description: "为 true 时仅输出合法 JSON（ok/retcode/data）",
+          },
+        },
+      },
+      async execute(_id, params) {
+        const err = guard();
+        if (err) return textResult(err);
+        const userIdRaw = params.user_id != null && String(params.user_id).trim() !== "" ? String(params.user_id).trim() : undefined;
+        const start = Number(params.start ?? 0);
+        const count = Number(params.count ?? 10);
+        const scopeRaw = params.scope;
+        const scope = scopeRaw == null ? undefined : Number(scopeRaw);
+        const hostUin = params.host_uin ? String(params.host_uin).trim() : undefined;
+        const rawJson = readBooleanParam(params.raw_json);
+        const includeImg = readBooleanParam(params.include_image_data);
+        const allPages = readBooleanParam(params.all_pages);
+        const maxRoundsRaw = params.max_rounds;
+        const maxRounds = maxRoundsRaw == null ? undefined : Number(maxRoundsRaw);
+        const res = await ctx.qzoneApi!.getFeedsHtmlActAll(userIdRaw, Number.isFinite(start) ? start : 0, Number.isFinite(count) ? count : 10, {
+          scope: scope != null && Number.isFinite(scope) ? scope : undefined,
+          host_uin: hostUin,
+          includeImageData: includeImg,
+          allPages,
+          maxRounds: maxRounds != null && Number.isFinite(maxRounds) ? Math.trunc(maxRounds) : undefined,
+        });
+        if (res.status !== "ok") return textResult(formatResponse(res));
+        if (rawJson) {
+          return textResult(JSON.stringify({ ok: true, retcode: res.retcode, data: res.data }, null, 2));
+        }
+        const dataObj = asObject(res.data);
+        const meta = buildQzoneMetaBlock(dataObj, {
+          kind: "html_act_all",
+          self_id: selfId,
+          user_id: userIdRaw ?? selfId,
+          start: Number.isFinite(start) ? start : 0,
+          count: Number.isFinite(count) ? count : 10,
+          scope: scope != null && Number.isFinite(scope) ? scope : undefined,
+          host_uin_for_act: hostUin,
+        });
+        const posts = extractPosts(res.data);
+        if (posts.length === 0) return textResult(`没有解析到动态条目（接口可能返回空或 HTML 结构与解析器不兼容）。\n\n${meta}`);
+        const state = { postsWithBase64: 0 };
+        const lines = posts.map((post) => summarizeActFeedItem(post, selfId, imageTempDir, state));
+        const pi = dataObj != null ? dataObj["_page_info"] : undefined;
+        const merged =
+          pi && typeof pi === "object" && !Array.isArray(pi) && readBoolLoose((pi as JsonObject)["all_pages"]);
+        const head = merged ? `空间混合动态 feeds_html_act_all（多页合并，${posts.length} 条）` : `空间动态 feeds_html_act_all (${posts.length} 条)`;
+        return textResult(`${head}:\n\n${lines.join("\n\n")}\n\n${meta}`);
       },
     },
     {
@@ -511,12 +840,14 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
     },
     {
       name: "qzone_get_comments",
-      description: "查看说说评论列表。",
+      description:
+        "查看说说评论列表。桥接返回字段多为 commentlist；tid 须与该说说所属空间主人一致。" +
+        ` 当前账号: ${selfId}；省略 user_id 时按当前登录号请求（与桥接默认一致）。`,
       parameters: {
         type: "object",
-        required: ["user_id", "tid"],
+        required: ["tid"],
         properties: {
-          user_id: { type: "string", description: "用户 QQ 号" },
+          user_id: { type: "string", description: "说说所属用户 QQ；省略则为当前登录号" },
           tid: { type: "string", description: "说说 tid" },
           count: { type: "number", description: "数量，默认 20" },
           offset: { type: "number", description: "偏移，默认 0" },
@@ -525,9 +856,9 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       async execute(_id, params) {
         const err = guard();
         if (err) return textResult(err);
-        const userId = String(params.user_id ?? "");
+        const userId = String(params.user_id ?? "").trim() || selfId;
         const tid = String(params.tid ?? "");
-        if (!userId || !tid) return textResult("[QZone错误] 缺少 user_id 或 tid");
+        if (!tid) return textResult("[QZone错误] 缺少 tid");
         const count = Number(params.count ?? 20);
         const offset = Number(params.offset ?? 0);
         const res = await ctx.qzoneApi!.getCommentList(userId, tid, Number.isFinite(count) ? count : 20, Number.isFinite(offset) ? offset : 0);
@@ -655,6 +986,7 @@ export function createQzoneTools(ctx: PluginContext): AnyAgentTool[] {
       name: "qzone_get_friend_feeds",
       description:
         "拉取「好友混排」最近空间动态（与指定某人主页时间线不同）。分页用 cursor：须从上一响应 _meta.next_cursor 原样复制，勿编造。" +
+        "**不用于**回答「我自己的说说有哪些」：混排中本人动态稀疏，请用 qzone_get_posts（省略 user_id）或 qzone_get_user_act_feed qq=当前号。" +
         "要看某个固定 QQ 的主页说说列表请用 qzone_get_posts（offset/count）。" +
         ` 当前账号: ${selfId}。默认摘要+_meta；raw_json=true 返回整段 JSON（可能含 base64，体积大）。`,
       parameters: {
