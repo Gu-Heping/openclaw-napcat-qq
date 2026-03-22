@@ -171,6 +171,71 @@ export class QzoneAPI {
     return this.request("get_friend_feeds", d);
   }
 
+  /**
+   * ic2 feeds_html_act_all：start/count 分页；与 get_emotion_list（feeds3_html_more）不同。
+   * includeImageData 默认 false（避免大体积）；为 true 时桥接会为 pic 填 base64。
+   */
+  getFeedsHtmlActAll(
+    userId: string | undefined,
+    start = 0,
+    count = 10,
+    opts?: {
+      scope?: number;
+      host_uin?: string;
+      filter?: string;
+      includeImageData?: boolean;
+      includeRawSnippet?: boolean;
+      /** 桥接侧多页合并（说说/分享等混合，按 tid 去重） */
+      allPages?: boolean;
+      maxRounds?: number;
+    },
+  ) {
+    const d: Record<string, unknown> = {
+      start,
+      count,
+    };
+    if (userId?.trim()) d.user_id = userId.trim();
+    if (opts?.scope != null) d.scope = opts.scope;
+    if (opts?.host_uin) d.host_uin = opts.host_uin;
+    if (opts?.filter) d.filter = opts.filter;
+    if (opts?.includeImageData === true) d.include_image_data = true;
+    if (opts?.includeRawSnippet === true) d.include_raw_snippet = true;
+    if (opts?.allPages === true) d.all_pages = true;
+    if (opts?.maxRounds != null && Number.isFinite(opts.maxRounds)) d.max_rounds = Math.trunc(opts.maxRounds);
+    return this.request("get_feeds_html_act_all", d);
+  }
+
+  /**
+   * 单 QQ 封装：桥接 `feed_owner` → hostuin + 默认 uin（与「看某人空间 ic2 流」一致）。
+   * 与 qzone_get_posts（offset/feeds3）分页语义不同。
+   */
+  getUserActFeed(
+    qq: string,
+    start = 0,
+    count = 10,
+    opts?: {
+      pageContextQq?: string;
+      scope?: number;
+      includeImageData?: boolean;
+      includeRawSnippet?: boolean;
+      allPages?: boolean;
+      maxRounds?: number;
+    },
+  ) {
+    const d: Record<string, unknown> = {
+      feed_owner: qq.trim(),
+      start,
+      count,
+    };
+    if (opts?.pageContextQq?.trim()) d.user_id = opts.pageContextQq.trim();
+    if (opts?.scope != null) d.scope = opts.scope;
+    if (opts?.includeImageData === true) d.include_image_data = true;
+    if (opts?.includeRawSnippet === true) d.include_raw_snippet = true;
+    if (opts?.allPages === true) d.all_pages = true;
+    if (opts?.maxRounds != null && Number.isFinite(opts.maxRounds)) d.max_rounds = Math.trunc(opts.maxRounds);
+    return this.request("get_feeds_html_act_all", d);
+  }
+
   getVisitorList(userId?: string) {
     const d: Record<string, unknown> = {};
     if (userId) d.user_id = userId;
