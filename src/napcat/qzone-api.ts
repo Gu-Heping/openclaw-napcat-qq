@@ -107,7 +107,7 @@ export class QzoneAPI {
     return this.request("get_feed_images", { user_id: userId, tid });
   }
 
-  /** 拉取 QZone CDN 图片为 base64（桥接白名单：qpic.cn、photo.store.qq.com、qzonestyle.gtimg.cn），与 onebot-qzone fetch_image 一致 */
+  /** 拉取 QZone CDN 图片为 base64（桥接白名单含 qpic.cn、*.store.qq.com 头像域、qzonestyle.gtimg.cn 等），与 onebot-qzone fetch_image 一致 */
   fetchImage(url: string) {
     return this.request("fetch_image", { url });
   }
