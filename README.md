@@ -153,13 +153,16 @@ NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config
 | **models** | object | `/model` 别名 → `[provider, model]` 映射 | 内置 kimi / claude / deepseek 等 |
 | **limits** | object | 重试、超时、消息/文件大小、历史条数等 | 见 openclaw.plugin.json |
 | **network** | object | 重连、ping、fetch 超时等 | 见 openclaw.plugin.json |
-| **paths** | object | workspace、imageTemp、sessionsDir、containerPrefixes 覆盖 | 默认基于 OPENCLAW_HOME / HOME |
+| **paths** | object | workspace、imageTemp、stickerStore、sessionsDir、containerPrefixes 覆盖 | 默认基于 OPENCLAW_HOME / HOME |
 | **stickers** | object | 表情包库：`enabled`、`inboundAutoCollect`、`storageBackend`（`json` \| `sqlite`）、`searchMode`（`heuristic` \| `fts`，仅 SQLite）等 | 见 `config.ts` 中 `StickerConfig` |
+| **qzone** | object | QQ 空间桥接：`enabled`、`bridgeUrl`、`accessToken`、`eventWsUrl`、`notifyUserId`、`notifyEvents` | 见 `config.ts` 中 `QzoneConfig` |
 
 - **Docker 看图**：宿主机需设置环境变量 `NAPCAT_RECEIVED_FILE_HOST_PATH`（与 docker 挂载的宿主机路径一致），否则见上文「Docker NapCat 与看图要点」。
 
 - **behavior**：`botNames`（@ 触发名）、`helpKeywords`、`questionPatterns`、`groupReplyProbInConvo` / `groupReplyProbRandom`、`groupReplyWindowMs`、`minIntervalMs`、`dedupTtlMs`。
-- **proactive**：`enabled`、`checkIntervalMs`、`minGlobalIntervalMs`、`perUserIntervalMs`、`minSinceUserMsgMs`、`quietHoursStart` / `quietHoursEnd`、`pendingKeywords`。
+- **proactive**：`enabled`、`checkIntervalMs`、`minGlobalIntervalMs`、`perUserIntervalMs`、`minSinceUserMsgMs`、`quietHoursStart` / `quietHoursEnd`、`pendingKeywords`、`dispatchJitterMaxMs`、`initialCheckJitterMaxMs`。
+- **limits**：`maxRetries`、`retryBaseDelayMs`、`apiTimeoutMs`、`apiRetryBackoffMs`、`imageMaxSize`（15MB）、`fileMaxSize`（20MB）、`uploadFileMaxSize`（100MB）、`maxMessageHistory`、`maxPendingRequests`。
+- **paths**：`workspace`、`home`、`imageTemp`、`stickerStore`、`sessionsDir`、`containerPrefixes`、`textExts`。
 
 完整 schema 见 **openclaw.plugin.json** 的 `configSchema`。
 
@@ -196,17 +199,19 @@ NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config
 
 ## QQ 命令（/ 开头）
 
+以下命令由本 QQ 插件处理（与 OpenClaw 核心命令区分）：
+
 | 命令 / 别名 | 说明 |
 |-------------|------|
-| **/help**、/h、/帮助 | 显示帮助与指令说明 |
+| **/帮助** | 显示 QQ 插件命令说明（中文） |
 | **/ping** | 测试连通性，回复 pong |
-| **/status**、/状态 | 查看运行状态、会话 key、发送记录条数 |
-| **/clear**、/new、/清除、/新会话、/reset | 清空当前 AI 对话上下文 |
+| **/clear**、/清除、/新对话、/重置 | 清空当前 AI 对话上下文（与核心 /new、/reset 等效） |
 | **/summary_clear**、/总结并清空 | 先总结对话写入长期记忆，再清空会话 |
-| **/model**、/模型 \<别名\> | 切换当前会话的模型（如 kimi、claude、deepseek、minimax、qwen、kimi-or、openrouter） |
 | **/note**、/笔记 \<内容\> | 给当前用户记一条笔记（写入记忆） |
 | **/history**、/记录 | 查看最近发送的消息（默认 5 条） |
 | **/clear_history**、/清除历史 | 清除消息发送记录 |
+
+**核心命令**（`/help`、`/status`、`/model`、`/new`、`/reset` 等）由 OpenClaw 核心处理，群聊需 @Bot 才会触发。
 
 群聊中需 **@Bot** 或触发配置的 **botNames / helpKeywords / questionPatterns** 才会进入回复流程。
 
@@ -222,7 +227,8 @@ NapCat 容器内 QQ 收文件通常落在 `/app/.config/QQ`（或 `/root/.config
   - **本人混合动态（ic2）**：`qzone_get_space_html_act_feed`、`qzone_get_user_act_feed`（`start/count`，与说说翻页勿混用）
   - **好友混排**：`qzone_get_friend_feeds`（**cursor** 游标）
   - **评论 / 赞 / 转发 / 详情**：`qzone_get_comments`、`qzone_comment`、`qzone_delete_comment`、`qzone_like`、`qzone_unlike`、`qzone_get_likes`、`qzone_forward`、`qzone_get_post_detail`、`qzone_get_post_images`、`qzone_get_traffic`
-  - **发删说说 / 相册等**：`qzone_publish`、`qzone_delete`、`qzone_get_albums`、`qzone_get_photos`、`qzone_upload_image`、`qzone_fetch_image`（评论图完整 URL + 落盘）、`qzone_emoji_list` …
+  - **发删说说 / 相册等**：`qzone_publish`、`qzone_delete`、`qzone_set_privacy`、`qzone_get_albums`、`qzone_get_photos`、`qzone_upload_image`、`qzone_fetch_image`（评论图完整 URL + 落盘）、`qzone_create_album`、`qzone_delete_album`、`qzone_delete_photo`、`qzone_emoji_list`
+  - **用户资料**：`qzone_get_visitors`（最近访客）、`qzone_get_portrait`（用户空间资料）
   - **运维**：`qzone_status`、`qzone_version`、`qzone_probe_routes`；其它见 `src/tools/qzone.ts` 注册表。
 - **表情包 / 梗图库**：`sticker_search`（检索，返回 rank/score）、`sticker_send`（发库内图）、`sticker_collect`（收藏；支持本地路径或 QQ 官方 CDN https，按文件内容去重）、`sticker_get_semantics` / `sticker_update_semantics` / `sticker_alias_add`。配置见 `plugins.entries["napcat-qq"].stickers`（`storageBackend`、`searchMode` 等，见 `config.ts` / `openclaw.plugin.json`）。
 
